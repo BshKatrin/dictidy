@@ -10,15 +10,38 @@ final class RewriteService {
     static let shared = RewriteService()
     private init() {}
 
+    /// Remote desktop and screen sharing clients. They forward keystrokes to another machine
+    /// immediately but sync the clipboard separately and later, so they need longer waits.
+    private static let remoteDesktopBundleIDs: Set<String> = [
+        "com.apple.ScreenSharing",
+        "com.microsoft.rdc.macos",
+        "com.microsoft.rdc.osx.beta",
+        "com.p5sys.jump.mac.viewer",
+        "com.edovia.screens.mac",
+        "com.edovia.screens5.mac",
+        "com.teamviewer.TeamViewer",
+        "com.philandro.anydesk",
+        "com.citrix.receiver.icaviewer.mac",
+        "com.parsec.www",
+        "com.realvnc.vncviewer",
+    ]
+
+    private var frontmostIsRemoteDesktop: Bool {
+        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return Self.remoteDesktopBundleIDs.contains(id)
+    }
+
     /// Synthesizes ⌘C and returns the freshly-copied selection, or nil if nothing was selected.
     func captureSelection() async throws -> String? {
         let pasteboard = NSPasteboard.general
         let startCount = pasteboard.changeCount
+        // A remote copy has to round trip back from the other machine before it lands here.
+        let timeout: TimeInterval = frontmostIsRemoteDesktop ? 2.0 : 1.0
 
-        postCommandKey(CGKeyCode(kVK_ANSI_C))
+        await postCommandKey(CGKeyCode(kVK_ANSI_C))
 
         // Wait (briefly) for the copy to land on the pasteboard.
-        let deadline = Date().addingTimeInterval(1.0)
+        let deadline = Date().addingTimeInterval(timeout)
         while pasteboard.changeCount == startCount && Date() < deadline {
             try await Task.sleep(nanoseconds: 30_000_000) // 30ms
         }
@@ -33,6 +56,11 @@ final class RewriteService {
     func paste(_ text: String, restoreClipboard: Bool) async throws {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
+        // Remote clients sync the clipboard to the other machine after the fact, so give that sync
+        // time to land before pasting, and far longer before swapping the old clipboard back.
+        let remote = frontmostIsRemoteDesktop
+        let settleDelay: UInt64 = remote ? 400_000_000 : 60_000_000
+        let restoreDelay: UInt64 = remote ? 1_500_000_000 : 300_000_000
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -41,19 +69,19 @@ final class RewriteService {
         // window, restore the original clipboard even when normal clipboard restoration is off:
         // a cancelled operation must not leave behind text it never pasted.
         do {
-            try await Task.sleep(nanoseconds: 60_000_000) // 60ms
+            try await Task.sleep(nanoseconds: settleDelay)
             try Task.checkCancellation()
         } catch {
             pasteboard.clearContents()
             if let previous { pasteboard.setString(previous, forType: .string) }
             throw error
         }
-        postCommandKey(CGKeyCode(kVK_ANSI_V))
+        await postCommandKey(CGKeyCode(kVK_ANSI_V))
 
         if restoreClipboard {
             // Once Cmd-V has been posted, finish the clipboard handoff even if cancellation arrives;
             // restoring immediately can race the receiving app before it reads the pasteboard.
-            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms — let the paste complete
+            try? await Task.sleep(nanoseconds: restoreDelay) // let the paste complete
             pasteboard.clearContents()
             if let previous {
                 pasteboard.setString(previous, forType: .string)
@@ -61,14 +89,29 @@ final class RewriteService {
         }
     }
 
-    /// Posts a Command-modified key down+up via a synthetic event tap.
-    private func postCommandKey(_ key: CGKeyCode) {
+    /// Posts a full Command-modified keystroke: Command down, key down, key up, Command up.
+    ///
+    /// Setting `.maskCommand` on the key events alone is enough for local apps, but remote desktop
+    /// clients track modifier state from the Command key's own events and would forward a bare
+    /// letter. The modifier events keep their default flags: overwriting them drops the device
+    /// bit that identifies which physical Command key is down.
+    private func postCommandKey(_ key: CGKeyCode) async {
         let source = CGEventSource(stateID: .combinedSessionState)
+        let commandDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Command), keyDown: true)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
         keyDown?.flags = .maskCommand
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         keyUp?.flags = .maskCommand
+        let commandUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Command), keyDown: false)
+
+        // Short gaps so clients that sample modifier state see Command held before the key arrives.
+        let gap: UInt64 = 10_000_000 // 10ms
+        commandDown?.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: gap)
         keyDown?.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: gap)
         keyUp?.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: gap)
+        commandUp?.post(tap: .cghidEventTap)
     }
 }

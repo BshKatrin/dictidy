@@ -194,6 +194,13 @@ once. Dictation also needs Microphone access.
 
 Make sure text is actually selected and that the current app supports standard copy and paste.
 
+### Pasting into a remote desktop
+
+Dictidy works inside Screen Sharing, Windows App, Jump, Screens, TeamViewer, AnyDesk, Citrix, Parsec,
+and VNC Viewer windows. Turn on clipboard sharing in your remote desktop client, because Dictidy pastes
+through your local clipboard. Pastes into these apps wait a little longer so the clipboard can sync
+to the remote machine first.
+
 ---
 
 ## Build From Source

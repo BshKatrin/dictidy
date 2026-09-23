@@ -9,6 +9,14 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-23
+
+### Fixed
+- **Paste works in remote desktop windows.** Dictating or rewriting inside Screen Sharing, Windows App
+  (Microsoft Remote Desktop), and similar remote desktop apps now pastes your text instead of a single
+  letter "v". Dictidy also waits for the clipboard to sync to the remote machine before pasting and
+  before restoring your previous clipboard.
+
 ## [1.2.0] - 2026-07-22
 
 ### Added
