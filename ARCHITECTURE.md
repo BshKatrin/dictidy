@@ -18,13 +18,13 @@ Sources/
   DictidyTests/ ── dependency-free test runner (XCTest isn't available under CLT-only)
 ```
 
-- **`DictidyKit`** has no platform dependencies — `Instruction`, `AnthropicModel`, `AnthropicClient`
-  (with an injectable transport so its request/error paths are testable), `HistoryEntry`,
-  `RewriteProvider` + `rewriteProviderOrder`, and `WordDiff`. This is where testable logic goes.
+- **`DictidyKit`** has no platform dependencies — `Instruction`, `RewriteModel`,
+  `RewriteProvider`, `AnthropicModel`, `AnthropicClient`, `OpenAIClient` (both clients have injectable
+  transports so request/error paths are testable), `HistoryEntry`, and `WordDiff`. This is where testable logic goes.
 - **`Services`** wrap the OS: `AccessibilityPermissions`, `MicrophonePermissions`, `KeychainService`,
   `RewriteService` (the ⌘C-capture / ⌘V-paste dance), `ShortcutsRegistry` (global hotkeys),
   `DictationService` (`AVAudioEngine` → 16 kHz mono), `WhisperEngine`/`WhisperModelStore`,
-  `LocalLLMEngine`/`LocalLLMModelStore`, `ModelStatus` (shared download state), `LaunchAtLogin`,
+  `ModelStatus` (speech model download state), `LaunchAtLogin`,
   and `Updater`.
 - **`AppState`** owns published state, seeds defaults, drives the menu-bar icon animation counters,
   and orchestrates the flows below.
@@ -32,10 +32,29 @@ Sources/
 ## Key flows
 
 **Rewrite** (⇧⌘R or a menu instruction): `RewriteService` copies the selection (synthetic ⌘C) →
-`AppState.performRewrite` runs it through the provider order from `rewriteProviderOrder` (primary, then
-the fallback if enabled and the primary hit an *availability* error — see
-`AnthropicError.isAvailabilityFailure`) → the result is recorded to history and pasted (synthetic ⌘V,
-restoring the clipboard).
+`AppState.performRewrite` captures the selected `RewriteModel` and routes to its provider with that
+provider’s Keychain credential → the result is recorded to history and pasted (synthetic ⌘V, restoring
+the clipboard). Errors leave the selected text intact; no automatic provider fallback is used.
+
+**Provider configuration:** either or both API keys can be saved. A single menu combines the configured
+providers’ model catalogs, with provider-qualified IDs so names cannot collide. Each catalog refresh
+has its own status, error, and generation token; removing/replacing a key invalidates stale requests.
+Existing Anthropic model selections and cached catalogs migrate without changing custom prompts.
+
+**OpenAI protocol:** `GET /v1/models` uses Bearer authentication. Its catalog does not advertise
+modality or endpoint support, so the app filters modern Responses text families and their fine-tunes,
+excluding dedicated audio/image/search and specialist models. `POST /v1/responses` sends combined
+base/style rules as `instructions`, source text as one user `input`, and `store: false`. It has no
+conversation history or tools. Output text is collected from message content across the output array;
+incomplete, refused, and empty responses are errors and never replace the source. The output budget
+accounts for reasoning tokens and older model limits. See the official
+[Responses text guide](https://developers.openai.com/api/docs/guides/text),
+[model catalog API](https://developers.openai.com/api/reference/resources/models/methods/list), and
+[reasoning guide](https://developers.openai.com/api/docs/guides/reasoning).
+
+**Anthropic protocol:** `GET /v1/models` supplies the live Claude catalog; `POST /v1/messages` sends
+the same combined rules as `system` and source text as one user message. Each API key is sent only to
+its provider’s fixed HTTPS host.
 
 **Dictation** (tap a hotkey): `DictationService` captures mic audio as 16 kHz mono in memory →
 `WhisperEngine` transcribes on-device → the transcript is pasted (Dictate) or first cleaned through the
@@ -44,8 +63,8 @@ rewrite provider (Dictate + Clean).
 ## Why the unusual build choices
 
 The dev machine has **Command Line Tools only (no full Xcode)**, which shapes two things:
-- **whisper.cpp and llama.cpp ship as prebuilt XCFrameworks** (SwiftPM binary targets with embedded
-  Metal), because CLT can't compile their Metal shaders from source — yet they stay GPU-accelerated.
+- **whisper.cpp ships as a prebuilt XCFramework** (a SwiftPM binary target with embedded Metal),
+  because CLT cannot compile its Metal shaders from source — speech transcription stays GPU-accelerated.
 - **`KeyboardShortcuts` is pinned to 1.15.0** — newer versions use the SwiftUI `#Preview` macro, whose
   plugin ships only with full Xcode.
 

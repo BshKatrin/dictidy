@@ -1,8 +1,7 @@
 import Foundation
 
-/// Download / readiness status for an on-device model — shared by `WhisperModelStore` (the Whisper
-/// speech model) and `LocalLLMModelStore` (the local rewrite model), so one set of UI (StatusBadge,
-/// the wizard's `DownloadRow`, the tab rows) renders either.
+/// Download and readiness state for the on-device Whisper speech model.
+/// Used by its settings and onboarding controls.
 enum ModelStatus: Equatable {
     case missing
     case downloading(Double)      // 0…1

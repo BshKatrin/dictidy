@@ -35,7 +35,7 @@ struct MenuBarContent: View {
                     }
                     Text("…enable Dictidy, then quit and relaunch")
                 }
-                if state.effectiveProviderOrder().isEmpty {
+                if !state.rewriteReady {
                     Button("Set up rewriting…") { openSettings(.rewrite) }
                 }
             }
@@ -45,7 +45,13 @@ struct MenuBarContent: View {
                     Button("Download speech model…") { openSettings(.dictation) }
                 }
                 if !MicrophonePermissions.isGranted {
-                    Button("Grant Microphone access…") { MicrophonePermissions.openSettings() }
+                    Button("Grant Microphone access…") {
+                        if MicrophonePermissions.status == .notDetermined {
+                            MicrophonePermissions.request { _ in state.refreshPermissions() }
+                        } else {
+                            MicrophonePermissions.openSettings()
+                        }
+                    }
                 }
             }
             Divider()
@@ -79,6 +85,11 @@ struct MenuBarContent: View {
                 Button("Set up dictation…") { openSettings(.dictation) }
             }
         }
+
+        Divider()
+
+        Button("Paste Last Text") { state.pasteLastText() }
+            .disabled(state.lastGeneratedText == nil || state.isWorking || state.isRecording)
 
         Divider()
 

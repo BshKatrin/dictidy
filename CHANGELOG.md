@@ -9,6 +9,37 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+### Added
+- **Paste Last Text from the menu bar.** Click in a text box, then choose Paste Last Text to retry
+  the latest rewrite or dictation without opening History. The latest output stays available for
+  the current session even when history is turned off, and respects your clipboard restore setting.
+- **OpenAI rewriting alongside Anthropic.** Save either or both API keys and choose from one model menu.
+  Each provider loads its available text models from its API. Keys stay in separate macOS Keychain
+  entries, and existing Anthropic selections are preserved.
+
+### Removed
+- **Local rewrite models and their downloads.** Rewriting now uses the selected online model, including
+  Dictate + Clean. The local rewrite engine and automatic provider fallback are removed. Whisper voice
+  transcription continues to run on your Mac.
+
+### Fixed
+- **Reopen Settings from Finder.** Opening an already-running Dictidy app now shows Settings when
+  all of its windows are closed.
+- **Recover permissions after an app replacement.** If macOS no longer recognizes a configured app's
+  Accessibility or Microphone access, Dictidy opens its permission controls on launch. The menu's
+  Microphone action now requests access when macOS needs a fresh approval, instead of sending you to
+  a settings list where Dictidy may not yet appear.
+
+### Changed
+- **Two focused writing defaults.** Auto Clean tidies dictated speech while keeping your voice; the new
+  Rewrite instruction composes a clear, thoughtful professional message with more freedom over wording
+  and flow. Untouched Formal, Friendly, and Translate to English presets are retired. Custom instructions
+  and existing Rewrite prompts are preserved.
+- **Shared writing rules leave the style in control.** The base instructions preserve facts, uncertainty,
+  greetings, signatures, and email paragraph breaks without forcing every style into light editing or
+  substantial rewriting. Ordinary hyphens and literal technical text are preserved; prose still avoids
+  em and en dashes. Custom base instructions remain intact.
+
 ## [1.2.1] - 2026-09-23
 
 ### Fixed

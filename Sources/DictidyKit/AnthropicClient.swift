@@ -22,20 +22,7 @@ public enum AnthropicError: LocalizedError, Equatable {
         }
     }
 
-    /// Whether this failure means Claude is *unavailable* (vs. a request/content problem), so a
-    /// configured local fallback should be tried. Network drops, a missing key, and auth / rate-limit
-    /// / server errors are availability failures; a 400-class request error, an empty response, or a
-    /// decode failure are not (retrying local would waste latency and mask the real problem).
-    public var isAvailabilityFailure: Bool {
-        switch self {
-        case .network, .missingAPIKey:
-            return true
-        case .http(let code, _):
-            return code == 401 || code == 403 || code == 429 || (500...599).contains(code)
-        case .emptyResponse, .decoding:
-            return false
-        }
-    }
+
 }
 
 /// Minimal Anthropic Messages API client over `URLSession` (there is no official
@@ -77,8 +64,7 @@ public struct AnthropicClient {
         return try Self.parseModels(data)
     }
 
-    /// Rewrite `text` using the given instruction (system prompt) and model. `timeout` can be
-    /// shortened when a local fallback is available, so a hung request doesn't block for the full 60s.
+    /// Rewrite `text` using the given instruction (system prompt) and model.
     public func rewrite(text: String, systemPrompt: String, model: String,
                         maxTokens: Int = 8192, timeout: TimeInterval = 60) async throws -> String {
         let payload: [String: Any] = [

@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Carbon.HIToolbox
 
@@ -9,6 +10,62 @@ import Carbon.HIToolbox
 final class RewriteService {
     static let shared = RewriteService()
     private init() {}
+
+    struct PasteTarget {
+        let application: NSRunningApplication
+        let window: AXUIElement?
+        let element: AXUIElement?
+    }
+
+    enum PasteError: LocalizedError {
+        case targetUnavailable
+
+        var errorDescription: String? {
+            "Couldn't return to the text box. Click in it and choose Paste Last Text again."
+        }
+    }
+
+    /// Menu-bar menus leave the receiving app frontmost. Save its focused window and control before yielding.
+    func capturePasteTarget() -> PasteTarget? {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        return PasteTarget(application: application,
+                           window: Self.elementAttribute(kAXFocusedWindowAttribute, of: appElement),
+                           element: Self.elementAttribute(kAXFocusedUIElementAttribute, of: appElement))
+    }
+
+    private static func elementAttribute(_ attribute: String, of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private func restoreFocus(to target: PasteTarget) async throws {
+        // Let the menu finish closing before activating a window or sending keystrokes.
+        try await Task.sleep(nanoseconds: 150_000_000)
+        guard !target.application.isTerminated else { throw PasteError.targetUnavailable }
+        if !target.application.isActive {
+            guard target.application.activate(options: [.activateIgnoringOtherApps]) else {
+                throw PasteError.targetUnavailable
+            }
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while !target.application.isActive && Date() < deadline {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        guard target.application.isActive else { throw PasteError.targetUnavailable }
+        if let window = target.window {
+            let result = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            if result == .invalidUIElement { throw PasteError.targetUnavailable }
+        }
+        if let element = target.element {
+            let result = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            if result == .invalidUIElement { throw PasteError.targetUnavailable }
+        }
+        // Apps without focus-setting Accessibility support retain their own caret on activation.
+        try await Task.sleep(nanoseconds: 60_000_000)
+    }
 
     /// Remote desktop and screen sharing clients. They forward keystrokes to another machine
     /// immediately but sync the clipboard separately and later, so they need longer waits.
@@ -53,7 +110,8 @@ final class RewriteService {
 
     /// Writes `text` to the pasteboard and synthesizes ⌘V to paste it over the selection.
     /// Optionally restores the previous clipboard contents afterward.
-    func paste(_ text: String, restoreClipboard: Bool) async throws {
+    func paste(_ text: String, restoreClipboard: Bool, to target: PasteTarget? = nil) async throws {
+        if let target { try await restoreFocus(to: target) }
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
         // Remote clients sync the clipboard to the other machine after the fact, so give that sync
@@ -71,6 +129,7 @@ final class RewriteService {
         do {
             try await Task.sleep(nanoseconds: settleDelay)
             try Task.checkCancellation()
+            if let target, !target.application.isActive { throw PasteError.targetUnavailable }
         } catch {
             pasteboard.clearContents()
             if let previous { pasteboard.setString(previous, forType: .string) }

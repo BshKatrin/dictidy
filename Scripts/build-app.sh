@@ -24,7 +24,7 @@ fi
 
 # Host-arch build (arm64 on Apple Silicon). Universal (--arch arm64 --arch x86_64) is intentionally
 # NOT used: it requires full Xcode's XCBuild, which the Command Line Tools lack, and Dictidy targets
-# Apple Silicon (Metal-accelerated whisper/llama). The CI release runner is arm64, so releases are arm64.
+# Apple Silicon (Metal-accelerated whisper). The CI release runner is arm64, so releases are arm64.
 echo "==> Building (${CONFIG})..."
 swift build -c "$CONFIG"
 
@@ -59,13 +59,12 @@ if [ -n "${DICTIDY_VERSION:-}" ]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${DICTIDY_VERSION}" "$APP_DIR/Contents/Info.plist"
 fi
 
-# Embed the whisper.cpp and llama.cpp frameworks. They're SwiftPM binaryTargets, so they are NOT
-# copied into the bundle automatically. Copy them into Contents/Frameworks and point @rpath there;
-# the executable links them as @rpath/<name>.framework/Versions/Current/<name>.
-echo "==> Embedding whisper.framework + llama.framework..."
+# Embed the whisper.cpp framework. It is a SwiftPM binaryTarget, so it is NOT
+# copied into the bundle automatically. Copy it into Contents/Frameworks and point @rpath there;
+# the executable links it as @rpath/<name>.framework/Versions/Current/<name>.
+echo "==> Embedding whisper.framework..."
 mkdir -p "$APP_DIR/Contents/Frameworks"
 cp -R "$BIN_DIR/whisper.framework" "$APP_DIR/Contents/Frameworks/"
-cp -R "$BIN_DIR/llama.framework" "$APP_DIR/Contents/Frameworks/"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 
 IDENTITY_CN="Dictidy Self-Signed"

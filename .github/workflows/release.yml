@@ -26,7 +26,7 @@ jobs:
       - name: Test before releasing
         # Build and execute separately so the SwiftPM driver does not remain resident alongside the
         # test process. `swift run` pushed the macOS runner over its memory limit after resolving the
-        # large whisper/llama binary artifacts, even though the test executable built successfully.
+        # large Whisper binary artifact, even though the test executable built successfully.
         run: |
           set -euo pipefail
           swift build --product DictidyTests

@@ -34,7 +34,7 @@ struct InstructionsTab: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 6) {
                 Text("These apply to every rewrite, so each instruction is just the style on top. This is "
-                     + "where the basics live, like returning only the rewritten text and never using dashes.")
+                     + "where the basics live, like preserving meaning, email formatting, and returning only the result.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 TextEditor(text: $state.baseSystemPrompt)

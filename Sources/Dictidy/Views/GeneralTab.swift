@@ -57,7 +57,10 @@ struct GeneralTab: View {
             HStack {
                 if MicrophonePermissions.status == .notDetermined {
                     Button("Request Microphone Access") {
-                        MicrophonePermissions.request { micGranted = $0 }
+                        MicrophonePermissions.request {
+                            micGranted = $0
+                            state.refreshPermissions()
+                        }
                     }
                 } else {
                     Button("Open Microphone Settings") { MicrophonePermissions.openSettings() }

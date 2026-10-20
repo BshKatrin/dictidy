@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+private extension Notification.Name {
+    static let dictidyOpenSettings = Notification.Name("DictidyOpenSettings")
+}
+
 @main
 struct DictidyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -63,13 +67,26 @@ struct MenuBarLabel: View {
                 maybeStartOnboarding()
                 updater.checkOnLaunchIfDue()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .dictidyOpenSettings)) { _ in
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "settings")
+            }
     }
 
     /// First launch: open the onboarding wizard for genuinely new users; silently mark an existing,
     /// already-configured install as onboarded so upgraders never see it.
     private func maybeStartOnboarding() {
-        guard !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") else { return }
-        if state.accessibilityTrusted && !state.effectiveProviderOrder().isEmpty {
+        if UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            // A replaced signing certificate can leave old permission entries looking enabled
+            // while this build has no access. Show the recovery controls instead of only a menu warning.
+            if !state.accessibilityTrusted || (state.dictationEngaged && !MicrophonePermissions.isGranted) {
+                state.settingsTab = .general
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "settings")
+            }
+            return
+        }
+        if state.accessibilityTrusted && state.rewriteReady {
             UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
             return
         }
@@ -98,6 +115,12 @@ struct MenuBarLabel: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // MenuBarExtra can count as a visible window even when all app panels are closed.
+        NotificationCenter.default.post(name: .dictidyOpenSettings, object: nil)
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-only app (no Dock icon). LSUIElement in Info.plist handles this for the
         // bundled .app; set it here too so behavior is correct even when run unbundled.

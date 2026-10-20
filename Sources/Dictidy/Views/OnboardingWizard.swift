@@ -1,5 +1,6 @@
 import SwiftUI
 import KeyboardShortcuts
+import DictidyKit
 
 // First-run onboarding wizard for Dictidy.
 //
@@ -10,12 +11,12 @@ import KeyboardShortcuts
 //
 // Flow: Welcome → Dictation → Rewrite → Permissions → Done.
 //   • Dictation: enable, then download the speech model right there (Continue waits for it).
-//   • Rewrite: enable, then add a Claude API key and/or download the on-device model (Continue waits).
+//   • Rewrite: enable, then add an Anthropic or OpenAI API key and choose a model (Continue waits).
 //   • Permissions: grant exactly what the enabled features need (Accessibility for either; Microphone
 //     for dictation). Every check is verified live — Continue stays disabled until it actually passes.
 //
 // Reuses the app's services: AccessibilityPermissions, MicrophonePermissions, KeychainService,
-// AppState (saveAPIKey / refreshModels / modelStore / localModelStore / status), KeyboardShortcuts,
+// AppState (saveAPIKey / refreshModels / modelStore / status), KeyboardShortcuts,
 // and the shared StatusBadge / StatusRow / DownloadRow.
 
 // MARK: - Steps
@@ -31,8 +32,6 @@ final class OnboardingModel: ObservableObject {
         static let index = "onboarding.index"
         static let dictation = "onboarding.dictationEnabled"
         static let rewrite = "onboarding.rewriteEnabled"
-        static let useClaude = "onboarding.rewriteUseClaude"
-        static let useLocal = "onboarding.rewriteUseLocal"
     }
 
     /// Default dictation shortcuts seeded on finish if the user enables dictation and hasn't set them:
@@ -45,10 +44,6 @@ final class OnboardingModel: ObservableObject {
     // Each feature is enabled by default and set up on its own screen — no "optional" framing.
     @Published var dictationEnabled = true { didSet { defaults.set(dictationEnabled, forKey: Keys.dictation) } }
     @Published var rewriteEnabled = true   { didSet { defaults.set(rewriteEnabled, forKey: Keys.rewrite) } }
-    // How rewriting runs: a Claude API key, the on-device model, or both.
-    @Published var rewriteUseClaude = true { didSet { defaults.set(rewriteUseClaude, forKey: Keys.useClaude) } }
-    @Published var rewriteUseLocal = false { didSet { defaults.set(rewriteUseLocal, forKey: Keys.useLocal) } }
-
     // Live-verified permission state (polled).
     @Published var accessibilityGranted = AccessibilityPermissions.isTrusted
     @Published var micGranted = MicrophonePermissions.isGranted
@@ -61,8 +56,6 @@ final class OnboardingModel: ObservableObject {
         index = defaults.integer(forKey: Keys.index)
         if defaults.object(forKey: Keys.dictation) != nil { dictationEnabled = defaults.bool(forKey: Keys.dictation) }
         if defaults.object(forKey: Keys.rewrite) != nil   { rewriteEnabled = defaults.bool(forKey: Keys.rewrite) }
-        if defaults.object(forKey: Keys.useClaude) != nil { rewriteUseClaude = defaults.bool(forKey: Keys.useClaude) }
-        if defaults.object(forKey: Keys.useLocal) != nil  { rewriteUseLocal = defaults.bool(forKey: Keys.useLocal) }
     }
 
     let steps: [OnboardingStep] = [.welcome, .dictation, .rewrite, .permissions, .done]
@@ -85,15 +78,6 @@ final class OnboardingModel: ObservableObject {
     func stopPolling() { timer?.invalidate(); timer = nil }
 
     func finish(_ state: AppState) {
-        // Persist the rewrite provider strategy from the chosen paths.
-        if rewriteEnabled {
-            switch (rewriteUseClaude, rewriteUseLocal) {
-            case (true, true):   state.rewriteProvider = .anthropic; state.fallbackEnabled = true
-            case (true, false):  state.rewriteProvider = .anthropic; state.fallbackEnabled = false
-            case (false, true):  state.rewriteProvider = .local;     state.fallbackEnabled = false
-            case (false, false): break   // nothing chosen; leave existing defaults
-            }
-        }
         // Dictation shortcut: seed a working default if enabled and none is bound; clear if disabled,
         // so the app's dictation-engaged state reflects the user's choice.
         let dictate = KeyboardShortcuts.Name(ShortcutsRegistry.dictateName)
@@ -111,7 +95,7 @@ final class OnboardingModel: ObservableObject {
             KeyboardShortcuts.setShortcut(nil, for: dictateClean)
         }
         defaults.set(true, forKey: "hasCompletedOnboarding")
-        [Keys.index, Keys.dictation, Keys.rewrite, Keys.useClaude, Keys.useLocal].forEach { defaults.removeObject(forKey: $0) }
+        [Keys.index, Keys.dictation, Keys.rewrite].forEach { defaults.removeObject(forKey: $0) }
         stopPolling()
     }
 }
@@ -127,7 +111,7 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Scrollable so a step with a key field plus two model downloads never clips.
+            // Scrollable so provider key fields and the speech model download never clips.
             ScrollView {
                 content
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -179,10 +163,7 @@ struct OnboardingView: View {
             return !model.dictationEnabled || isReady(state.modelStatus)
         case .rewrite:
             guard model.rewriteEnabled else { return true }
-            let atLeastOne = model.rewriteUseClaude || model.rewriteUseLocal
-            let claudeOK = !model.rewriteUseClaude || state.anthropicReady
-            let localOK  = !model.rewriteUseLocal  || state.localModelReady
-            return atLeastOne && claudeOK && localOK
+            return state.rewriteReady
         case .permissions:
             let needAccessibility = model.dictationEnabled || model.rewriteEnabled
             let needMic = model.dictationEnabled
@@ -245,66 +226,18 @@ private struct DictationStep: View {
 }
 
 private struct RewriteStep: View {
-    @EnvironmentObject var state: AppState
     @ObservedObject var model: OnboardingModel
-    @State private var key = KeychainService.load() ?? ""
-    @State private var refreshing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StepTitle("Rewrite", "Select any text and Dictidy rewrites it in place. Fix grammar, change the tone, or tighten it, in any app.")
-
-            Toggle(isOn: $model.rewriteEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Set up rewriting").fontWeight(.semibold)
-                    Text("Rephrase or clean up text you have already written.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .toggleStyle(.switch)
-
+            StepTitle("Rewrite", "Select text and Dictidy rewrites it in place using the online model you choose.")
+            Toggle("Set up rewriting", isOn: $model.rewriteEnabled).toggleStyle(.switch)
             if model.rewriteEnabled {
                 Divider()
-                Text("Choose how rewriting runs. Use a Claude API key, the on-device model, or both.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
-                Toggle(isOn: $model.rewriteUseClaude) { Text("Use my Claude API key").fontWeight(.medium) }
-                if model.rewriteUseClaude {
-                    HStack {
-                        SecureField("sk-ant-…", text: $key).textFieldStyle(.roundedBorder)
-                        Button("Save") {
-                            state.saveAPIKey(key.trimmingCharacters(in: .whitespacesAndNewlines))
-                            refreshing = true
-                            Task { await state.refreshModels(); refreshing = false }
-                        }.disabled(key.isEmpty)
-                    }
-                    if refreshing {
-                        StatusBadge(.working, label: "Validating…")
-                    } else if state.anthropicReady {
-                        StatusBadge(.ready, label: "Valid key · \(state.models.count) models")
-                        Picker("Model", selection: $state.selectedModelID) {
-                            ForEach(state.models.sortedByDisplayName()) { Text($0.displayName).tag($0.id) }
-                        }.pickerStyle(.menu)
-                    } else {
-                        Link("Get a key ↗", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                            .font(.callout)
-                    }
-                }
-
-                Toggle(isOn: $model.rewriteUseLocal) { Text("Use the on-device model").fontWeight(.medium) }
-                if model.rewriteUseLocal {
-                    DownloadRow(status: state.localModelStatus,
-                                sizeNote: "Qwen3-4B-Instruct · about 2.5 GB · no key, runs offline on your Mac",
-                                download: { state.localModelStore.download() },
-                                cancel:   { state.localModelStore.cancel() })
-                }
-
-                if !model.rewriteUseClaude && !model.rewriteUseLocal {
-                    Text("Pick at least one so rewriting has something to run.")
-                        .font(.caption).foregroundStyle(.orange)
-                }
+                RewriteConfigurationView()
             } else {
-                Text("Rewriting stays off for now. It is a core part of Dictidy, and you can turn it on anytime in Settings.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("You can set up rewriting anytime in Settings.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
     }
@@ -391,12 +324,7 @@ private struct DoneStep: View {
     }
 
     private var rewriteDetail: String {
-        switch (model.rewriteUseClaude, model.rewriteUseLocal) {
-        case (true, true):   return "Claude and on-device"
-        case (true, false):  return "Claude"
-        case (false, true):  return "On-device"
-        case (false, false): return "On"
-        }
+        state.activeProviderLabel
     }
 
     private func summary(_ title: String, _ detail: String, on: Bool) -> some View {

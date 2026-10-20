@@ -9,7 +9,7 @@ ideal place to start.
 - **macOS 13.3+ on Apple Silicon.**
 - **Xcode Command Line Tools** (`xcode-select --install`). **Full Xcode is not required.** The project
   builds with `swift build`; it deliberately avoids anything that needs the full IDE (see
-  [`ARCHITECTURE.md`](ARCHITECTURE.md) for why `KeyboardShortcuts` is pinned and why whisper/llama ship
+  [`ARCHITECTURE.md`](ARCHITECTURE.md) for why `KeyboardShortcuts` is pinned and why whisper ships
   as prebuilt XCFrameworks).
 
 ## Build & run

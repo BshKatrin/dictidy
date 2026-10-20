@@ -13,14 +13,17 @@ enum SettingsTab: Hashable {
 enum DictationMode { case raw, clean }
 
 /// Central app state: instructions, live model list, selection, settings. Persists to
-/// UserDefaults (instructions + cached models) and the Keychain (API key), and wires the
+/// UserDefaults (instructions + cached models) and the Keychain (API keys), and wires the
 /// global shortcuts to the rewrite flow.
 @MainActor
 final class AppState: ObservableObject {
     @Published var instructions: [Instruction] = []
-    @Published var models: [AnthropicModel] = []
-    @Published var modelsLastFetched: Date?
-    @Published var hasAPIKey: Bool = false { didSet { updateSetupPulse() } }
+    @Published var models: [RewriteModel] = [] { didSet { updateSetupPulse() } }
+    @Published var modelsLastFetched: [RewriteProvider: Date] = [:]
+    @Published var modelErrors: [RewriteProvider: String] = [:]
+    @Published var refreshingProviders: Set<RewriteProvider> = []
+    @Published var hasAnthropicAPIKey = false { didSet { updateSetupPulse() } }
+    @Published var hasOpenAIAPIKey = false { didSet { updateSetupPulse() } }
     @Published var launchAtLogin: Bool = false
     @Published var isWorking: Bool = false {
         didSet {
@@ -57,29 +60,20 @@ final class AppState: ObservableObject {
     }
     /// The shared **base** system prompt, composed in front of every instruction's style prompt at
     /// rewrite time. It carries the output mechanics (return only the rewritten text, treat the input as
-    /// material, never use dashes, preserve meaning and language) so each instruction is purely style.
+    /// material, preserve meaning and language, and format the result) so each instruction is purely style.
     /// Editable in Settings; `resetBaseSystemPrompt()` restores the default.
     @Published var baseSystemPrompt: String = Instruction.baseSystemPromptDefault {
         didSet { defaults.set(baseSystemPrompt, forKey: Keys.baseSystemPrompt) }
     }
 
-    /// The primary backend for rewrites. Anthropic by default; `local` uses the on-device model.
-    @Published var rewriteProvider: RewriteProvider = .anthropic {
-        didSet { defaults.set(rewriteProvider.rawValue, forKey: Keys.rewriteProvider); updateSetupPulse() }
-    }
-    /// When true, a rewrite falls back to the *other* provider if the primary is unavailable
-    /// (offline, no key, rate-limited, server error, or model not loaded). Opt-in; default off.
-    @Published var fallbackEnabled: Bool = false {
-        didSet { defaults.set(fallbackEnabled, forKey: Keys.fallbackEnabled); updateSetupPulse() }
-    }
-    /// Mirror of the local rewrite model download/readiness status, for the Rewrite settings UI.
-    @Published var localModelStatus: ModelStatus = .missing { didSet { updateSetupPulse() } }
     @Published var restoreClipboard: Bool = true {
         didSet { defaults.set(restoreClipboard, forKey: Keys.restoreClipboard) }
     }
     /// Recorded before/after text of past rewrites (newest first), so the user can recover text
     /// they later lose. Persisted to a JSON file, not UserDefaults (see HistoryStore).
     @Published var history: [HistoryEntry] = []
+    /// Session-only recovery buffer, independent of saved history and the system clipboard.
+    @Published private(set) var lastGeneratedText: String?
     @Published var keepHistory: Bool = true {
         didSet { defaults.set(keepHistory, forKey: Keys.keepHistory) }
     }
@@ -111,14 +105,14 @@ final class AppState: ObservableObject {
     }
 
     let modelStore = WhisperModelStore()
-    let localModelStore = LocalLLMModelStore()
     private let registry = ShortcutsRegistry()
     private let escapeKeyMonitor = EscapeKeyMonitor()
     private let defaults = UserDefaults.standard
-    /// In-memory copy of the API key, read from the Keychain lazily on first use and cached for
+    /// In-memory copies of API keys, read from the Keychain lazily on first use and cached for
     /// the app's lifetime. Reading the Keychain triggers a macOS authorization prompt, so we do
     /// it at most once per launch instead of on every rewrite. Kept in sync on save/remove.
-    private var cachedAPIKey: String?
+    private var cachedAPIKeys: [RewriteProvider: String] = [:]
+    private var refreshTokens: [RewriteProvider: UUID] = [:]
     private var spinnerTask: Task<Void, Never>?
     private var setupTask: Task<Void, Never>?
     private var permissionTask: Task<Void, Never>?
@@ -135,11 +129,10 @@ final class AppState: ObservableObject {
     private let failureEscalationThreshold = 3             // 3rd rapid failure → show the window
     private let historyLimit = 100                         // keep only the newest N rewrites
     private var whisperEngine: WhisperEngine?
-    private var localEngine: LocalLLMEngine?
     private var dictationMode: DictationMode?
     private var recordingTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
-    /// Releases resident models after a spell of inactivity so a one-off rewrite/dictation doesn't
+    /// Releases the resident speech model after a spell of inactivity so one-off dictation doesn't
     /// pin GBs of memory for the rest of the session. Re-armed on each use.
     private var idleUnloadTask: Task<Void, Never>?
     private let idleUnloadDelay: UInt64 = 240_000_000_000   // 4 minutes
@@ -152,21 +145,21 @@ final class AppState: ObservableObject {
     private enum Keys {
         static let seeded = "didSeedDefaults"
         static let instructions = "instructions"
-        static let selectedModel = "selectedModelID"
-        static let rewriteProvider = "rewriteProvider"
-        static let fallbackEnabled = "fallbackEnabled"
+        static let selectedModel = "selectedRewriteModelID"
         static let restoreClipboard = "restoreClipboard"
-        static let models = "cachedModels"
-        static let modelsFetched = "modelsLastFetched"
+        static let models = "cachedRewriteModels"
         static let keepHistory = "keepHistory"
         static let playDictationTones = "playDictationTones"
         static let dictationCleanupInstruction = "dictationCleanupInstruction"
         static let baseSystemPrompt = "baseSystemPrompt"
+        static let instructionDefaultsRevision = "instructionDefaultsRevision"
     }
 
     init() {
         loadPersisted()
-        hasAPIKey = KeychainService.exists() // existence check — doesn't read the secret, so no prompt at launch
+        hasAnthropicAPIKey = KeychainService.exists(provider: .anthropic)
+        hasOpenAIAPIKey = KeychainService.exists(provider: .openai)
+        if !availableModels.isEmpty || configuredProviders.isEmpty { reconcileModelSelection() }
         launchAtLogin = LaunchAtLogin.isEnabled
 
         escapeKeyMonitor.onEscape = { [weak self] in self?.cancelActiveOperation() }
@@ -184,14 +177,9 @@ final class AppState: ObservableObject {
         modelStore.onStatusChange = { [weak self] status in self?.modelStatus = status }
         modelStore.resolve()
 
-        localModelStore.onStatusChange = { [weak self] status in self?.localModelStatus = status }
-        localModelStore.resolve()
-
-        // Refresh the live model list at launch only when we have nothing cached to show —
-        // otherwise we'd read the Keychain (and trigger its auth prompt) on every launch. With a
-        // cached list, models refresh on demand (Settings → Refresh) or when the key is saved.
-        if hasAPIKey && models.isEmpty {
-            Task { await refreshModels() }
+        // Use cached catalogs at launch; read keys only for providers with no cached models.
+        for provider in configuredProviders where !models.contains(where: { $0.provider == provider }) {
+            Task { await refreshModels(for: provider) }
         }
 
         updateSetupPulse()   // start the attention pulse if the app launches needing setup
@@ -199,37 +187,30 @@ final class AppState: ObservableObject {
 
     // MARK: - Setup status
 
-    /// True when the app can't actually perform a rewrite yet — drives the menu-bar warning state
-    /// and the in-menu setup checklist. Order-aware: if a configured fallback covers an unconfigured
-    /// primary, the app *can* rewrite, so no warning. Accessibility is needed regardless.
-    var needsSetup: Bool {
-        !accessibilityTrusted || effectiveProviderOrder().isEmpty
+    var needsSetup: Bool { !accessibilityTrusted || !rewriteReady }
+
+    func hasAPIKey(for provider: RewriteProvider) -> Bool {
+        provider == .anthropic ? hasAnthropicAPIKey : hasOpenAIAPIKey
     }
 
-    /// Whether the Anthropic path is usable (uses the cheap `hasAPIKey` existence flag — never reads
-    /// the Keychain secret, so this stays prompt-free even when evaluated on every menu open).
-    var anthropicReady: Bool { hasAPIKey && !selectedModelID.isEmpty }
-
-    /// Whether the on-device rewrite model is downloaded and ready.
-    var localModelReady: Bool {
-        if case .ready = localModelStatus { return true }
-        return false
+    var configuredProviders: Set<RewriteProvider> {
+        Set(RewriteProvider.allCases.filter { hasAPIKey(for: $0) })
     }
 
-    /// Providers to try for one rewrite, in order (primary, then fallback if enabled + ready).
-    func effectiveProviderOrder() -> [RewriteProvider] {
-        rewriteProviderOrder(primary: rewriteProvider, fallbackEnabled: fallbackEnabled,
-                             anthropicReady: anthropicReady, localReady: localModelReady)
-    }
-
-    /// Short label for the provider a rewrite will use right now (respects primary + fallback),
-    /// for the menu "Ready · …" footer. Empty when nothing is set up.
-    var activeProviderLabel: String {
-        switch effectiveProviderOrder().first {
-        case .anthropic: return models.first(where: { $0.id == selectedModelID })?.displayName ?? "Claude"
-        case .local:     return "on-device model"
-        case nil:        return ""
+    var availableModels: [RewriteModel] {
+        models.filter { hasAPIKey(for: $0.provider) }.sorted {
+            if $0.provider != $1.provider { return $0.provider.rawValue < $1.provider.rawValue }
+            return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
         }
+    }
+
+    var selectedModel: RewriteModel? { availableModels.first { $0.id == selectedModelID } }
+    var rewriteReady: Bool { selectedModel != nil }
+    var activeProviderLabel: String { selectedModel?.label ?? "" }
+
+    private func reconcileModelSelection() {
+        selectedModelID = RewriteModel.resolvedSelection(selectedModelID, models: models,
+                                                         configuredProviders: configuredProviders)
     }
 
     /// The user has engaged with dictation: a dictation shortcut is bound, OR the model download
@@ -283,10 +264,9 @@ final class AppState: ObservableObject {
     func runRewrite(instruction: Instruction) {
         guard !isWorking, !isRecording else { return }
 
-        let order = effectiveProviderOrder()
-        guard !order.isEmpty else {
+        guard let model = selectedModel else {
             settingsTab = .rewrite
-            notify("Set up a rewrite provider first.\n\nOpen Settings → Rewrite and either add your Anthropic API key + pick a model, or download the local (on-device) model.")
+            notify("Set up a rewrite provider first.\n\nOpen Settings → Rewrite, add an Anthropic or OpenAI API key, and choose a model.")
             return
         }
         guard AccessibilityPermissions.isTrusted else {
@@ -308,7 +288,7 @@ final class AppState: ObservableObject {
                     return
                 }
                 guard self.processingIsCurrent(id) else { return }
-                await self.performRewrite(order: order, text: selection, instruction: instruction,
+                await self.performRewrite(model: model, text: selection, instruction: instruction,
                                           before: selection, kind: .rewrite, processingID: id)
                 guard self.processingIsCurrent(id) else { return }
                 self.noSelectionFailureCount = 0
@@ -322,132 +302,113 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Runs `text` through the providers in `order` (primary, then fallback), records history
-    /// (attributed to whichever provider succeeded) and pastes the result. On a provider failure it
-    /// advances to the next only if the error means the provider is *unavailable* (see
-    /// `shouldFallback`); a genuine request/content error surfaces instead. Notifies once, only if
-    /// the whole order fails. Caller owns isWorking. Shared by the selection rewrite and Dictate + Clean.
-    private func performRewrite(order: [RewriteProvider], text: String, instruction: Instruction,
+    /// Rewrite with the model captured at invocation, then paste and record the actual model used.
+    private func performRewrite(model: RewriteModel, text: String, instruction: Instruction,
                                 before: String, kind: HistoryKind, processingID: UUID) async {
-        var lastError: Error?
-        for (index, provider) in order.enumerated() {
-            guard processingIsCurrent(processingID) else { return }
-            if index > 0 { statusMessage = "Falling back to \(provider.displayName)…" }
-            do {
-                let (result, modelName) = try await generate(with: provider, text: text,
-                                                             systemPrompt: Instruction.composeSystemPrompt(base: baseSystemPrompt, style: instruction.systemPrompt))
-                guard processingIsCurrent(processingID) else { return }
-                try await RewriteService.shared.paste(result, restoreClipboard: restoreClipboard)
-                guard processingIsCurrent(processingID) else { return }
-                recordHistory(before: before, after: result, instructionName: instruction.name,
-                              model: modelName, kind: kind)
-                scheduleIdleUnload()
-                return
-            } catch {
-                guard processingIsCurrent(processingID) else { return }
-                lastError = error
-                if !shouldFallback(after: error) { break }   // request/content error → surface it
-            }
-        }
         guard processingIsCurrent(processingID) else { return }
-        notify(lastError?.localizedDescription ?? "The rewrite failed.")
-    }
-
-    /// Generates a rewrite with a single provider, returning the text and the model name to record.
-    private func generate(with provider: RewriteProvider, text: String, systemPrompt: String) async throws -> (String, String) {
-        // Frame the text as inert material to rewrite (not a request to answer), so a dictation phrased
-        // at the assistant gets cleaned instead of obeyed. Applied here so every provider sees it.
-        let userText = rewriteInputMessage(text)
-        switch provider {
-        case .anthropic:
-            guard let key = apiKey(), !key.isEmpty else { throw AnthropicError.missingAPIKey }
-            // Shorten the timeout when a local fallback can pick up, so a hung request fails over fast.
-            let timeout: TimeInterval = (fallbackEnabled && localModelReady) ? 25 : 60
-            let result = try await AnthropicClient(apiKey: key).rewrite(
-                text: userText, systemPrompt: systemPrompt, model: selectedModelID, timeout: timeout)
-            let name = models.first(where: { $0.id == selectedModelID })?.displayName ?? selectedModelID
-            return (result, name)
-        case .local:
-            let engine = try await resolveLocalEngine()
-            return (try await engine.rewrite(text: userText, systemPrompt: systemPrompt),
-                    LocalLLMModelStore.modelDisplayName)
+        do {
+            let result = try await generate(model: model, text: text,
+                systemPrompt: Instruction.composeSystemPrompt(base: baseSystemPrompt, style: instruction.systemPrompt))
+            guard processingIsCurrent(processingID) else { return }
+            try await pasteGeneratedText(result)
+            guard processingIsCurrent(processingID) else { return }
+            recordHistory(before: before, after: result, instructionName: instruction.name, model: model.label, kind: kind)
+            scheduleIdleUnload()
+        } catch {
+            guard processingIsCurrent(processingID) else { return }
+            notify(error.localizedDescription)
         }
     }
 
-    /// Whether a provider error should advance to the next provider. Anthropic: only availability
-    /// failures (see `AnthropicError.isAvailabilityFailure`). Local-engine failures always fall back
-    /// (Claude is more capable). Anything else (unexpected) falls back too.
-    private func shouldFallback(after error: Error) -> Bool {
-        if let e = error as? AnthropicError { return e.isAvailabilityFailure }
-        return true
+    /// Credentials and wire model IDs come from the captured model, never a mutable picker selection.
+    private func generate(model: RewriteModel, text: String, systemPrompt: String) async throws -> String {
+        let userText = rewriteInputMessage(text)
+        let key = apiKey(for: model.provider) ?? ""
+        switch model.provider {
+        case .anthropic:
+            guard !key.isEmpty else { throw AnthropicError.missingAPIKey }
+            return try await AnthropicClient(apiKey: key).rewrite(
+                text: userText, systemPrompt: systemPrompt, model: model.modelID)
+        case .openai:
+            guard !key.isEmpty else { throw OpenAIError.missingAPIKey }
+            return try await OpenAIClient(apiKey: key).rewrite(
+                text: userText, systemPrompt: systemPrompt, model: model.modelID)
+        }
     }
 
-    /// Re-run `text` (e.g. from History) through the active provider + instruction, record the
-    /// result (so it appears at the top of History), and copy it to the clipboard. Unlike
-    /// `performRewrite` it does not paste — it's invoked from the History window, where there's no
-    /// text cursor to paste into.
+    /// Re-run a History entry and copy the completed rewrite without changing the current selection.
     func rewriteAgain(_ text: String, instruction: Instruction) {
         guard !isWorking, !isRecording, !text.isEmpty else { return }
-        let order = effectiveProviderOrder()
-        guard !order.isEmpty else {
+        guard let model = selectedModel else {
             settingsTab = .rewrite
-            notify("Set up a rewrite provider first — Settings → Rewrite.")
+            notify("Add an API key and choose a model in Settings → Rewrite.")
             return
         }
         let id = beginProcessing(status: "Rewriting…")
         processingTask = Task { [weak self] in
             guard let self else { return }
             defer { self.finishProcessing(id: id) }
-            var lastError: Error?
-            for (index, provider) in order.enumerated() {
+            do {
+                let result = try await self.generate(model: model, text: text,
+                    systemPrompt: Instruction.composeSystemPrompt(base: self.baseSystemPrompt, style: instruction.systemPrompt))
                 guard self.processingIsCurrent(id) else { return }
-                if index > 0 { self.statusMessage = "Falling back to \(provider.displayName)…" }
-                do {
-                    let (result, modelName) = try await self.generate(
-                        with: provider, text: text,
-                        systemPrompt: Instruction.composeSystemPrompt(base: self.baseSystemPrompt,
-                                                                       style: instruction.systemPrompt))
-                    guard self.processingIsCurrent(id) else { return }
-                    self.recordHistory(before: text, after: result, instructionName: instruction.name,
-                                       model: modelName, kind: .rewrite)
-                    self.copyToClipboard(result)
-                    self.scheduleIdleUnload()
-                    return
-                } catch {
-                    guard self.processingIsCurrent(id) else { return }
-                    lastError = error
-                    if !self.shouldFallback(after: error) { break }
-                }
+                self.lastGeneratedText = result
+                self.recordHistory(before: text, after: result, instructionName: instruction.name, model: model.label, kind: .rewrite)
+                self.copyToClipboard(result)
+                self.scheduleIdleUnload()
+            } catch {
+                guard self.processingIsCurrent(id) else { return }
+                self.notify(error.localizedDescription)
             }
-            guard self.processingIsCurrent(id) else { return }
-            self.notify(lastError?.localizedDescription ?? "The rewrite failed.")
         }
     }
 
-    /// Builds (once) and returns the local LLM engine from the downloaded model. The ~2.5 GB load
-    /// runs off the main actor; the engine is cached until idle-unload releases it.
-    private func resolveLocalEngine() async throws -> LocalLLMEngine {
-        if let engine = localEngine { return engine }
-        guard case .ready(let url) = localModelStatus else {
-            throw LocalLLMEngine.EngineError.modelLoadFailed("model not installed")
-        }
-        let engine = try await Task.detached(priority: .userInitiated) {
-            try LocalLLMEngine(modelURL: url)
-        }.value
-        localEngine = engine
-        return engine
+    // MARK: - Paste recovery
+
+    /// Retain output before attempting the paste so a failed handoff can be retried without generating again.
+    private func pasteGeneratedText(_ text: String) async throws {
+        lastGeneratedText = text
+        try await RewriteService.shared.paste(text, restoreClipboard: restoreClipboard)
     }
 
-    /// Releases resident models (local LLM + Whisper) after `idleUnloadDelay` of no activity, so a
+    func pasteLastText() {
+        guard !isWorking, !isRecording, let text = lastGeneratedText else { return }
+        guard AccessibilityPermissions.isTrusted else {
+            accessibilityTrusted = false
+            startPermissionMonitorIfNeeded()
+            notify("Dictidy needs Accessibility access to paste text.\n\nEnable Dictidy in System Settings → Privacy & Security → Accessibility, then quit and relaunch Dictidy.")
+            AccessibilityPermissions.prompt()
+            return
+        }
+        // Capture synchronously while the menu action still belongs to the app the user was typing in.
+        guard let target = RewriteService.shared.capturePasteTarget() else {
+            notify("Click in the text box where you want the text, then choose Paste Last Text again.")
+            return
+        }
+        let id = beginProcessing(status: "Pasting…")
+        processingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishProcessing(id: id) }
+            do {
+                try await RewriteService.shared.paste(text, restoreClipboard: self.restoreClipboard, to: target)
+            } catch is CancellationError {
+                // Escape cancels the retry without discarding the recovery buffer.
+            } catch {
+                guard self.processingIsCurrent(id) else { return }
+                self.notify(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Releases the resident Whisper model after `idleUnloadDelay` of no activity, so a
     /// single rewrite/dictation doesn't keep GBs mapped for the rest of the session. Setting the
-    /// actors to nil runs their deinit (llama_free / whisper_free). Re-armed on each use.
+    /// the engine to nil runs its deinit (whisper_free). Re-armed on each use.
     private func scheduleIdleUnload() {
         idleUnloadTask?.cancel()
         idleUnloadTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: self.idleUnloadDelay)
             guard !Task.isCancelled, !self.isWorking, !self.isRecording else { return }
-            self.localEngine = nil
             self.whisperEngine = nil
             self.idleUnloadTask = nil
         }
@@ -513,6 +474,11 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Dictation
+
+    /// Recheck permission-dependent setup state after a system authorization prompt completes.
+    func refreshPermissions() {
+        accessibilityTrusted = AccessibilityPermissions.isTrusted
+    }
 
     /// Instruction that "Dictate + Clean" runs the transcript through (default: Auto Clean).
     var dictationCleanupInstruction: Instruction? {
@@ -594,19 +560,18 @@ final class AppState: ObservableObject {
                 guard self.processingIsCurrent(id) else { return }
                 switch mode {
                 case .raw:
-                    try await RewriteService.shared.paste(transcript, restoreClipboard: self.restoreClipboard)
+                    try await self.pasteGeneratedText(transcript)
                     guard self.processingIsCurrent(id) else { return }
                     self.recordRawDictation(transcript: transcript)
                     self.scheduleIdleUnload()
                 case .clean:
-                    let order = self.effectiveProviderOrder()
-                    if let instruction = self.dictationCleanupInstruction, !order.isEmpty {
+                    if let instruction = self.dictationCleanupInstruction, let model = self.selectedModel {
                         self.statusMessage = "Cleaning…"
-                        await self.performRewrite(order: order, text: transcript, instruction: instruction,
+                        await self.performRewrite(model: model, text: transcript, instruction: instruction,
                                                   before: transcript, kind: .dictationClean, processingID: id)
                     } else {
                         // No cleanup instruction or no rewrite provider set up — paste the raw transcript.
-                        try await RewriteService.shared.paste(transcript, restoreClipboard: self.restoreClipboard)
+                        try await self.pasteGeneratedText(transcript)
                         guard self.processingIsCurrent(id) else { return }
                         self.recordRawDictation(transcript: transcript)
                         self.scheduleIdleUnload()
@@ -688,49 +653,87 @@ final class AppState: ObservableObject {
         watchdogTask = nil
     }
 
-    // MARK: - API key
+    // MARK: - API keys and live catalogs
 
-    /// The API key, read from the Keychain once (on first use) and cached in memory thereafter,
-    /// so we never re-prompt for Keychain access on subsequent rewrites. Returns nil if unset.
-    private func apiKey() -> String? {
-        if cachedAPIKey == nil {
-            cachedAPIKey = KeychainService.load()
+    private func apiKey(for provider: RewriteProvider) -> String? {
+        if cachedAPIKeys[provider] == nil {
+            cachedAPIKeys[provider] = KeychainService.load(provider: provider)
         }
-        return cachedAPIKey
+        return cachedAPIKeys[provider]
     }
 
-    func saveAPIKey(_ key: String) {
-        KeychainService.save(key)
-        cachedAPIKey = key
-        hasAPIKey = true
-        Task { await refreshModels() }
-    }
-
-    func removeAPIKey() {
-        KeychainService.delete()
-        cachedAPIKey = nil
-        hasAPIKey = false
-        models = []
+    @discardableResult
+    func saveAPIKey(_ key: String, provider: RewriteProvider) -> Bool {
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return false }
+        do { try KeychainService.save(key, provider: provider) }
+        catch { modelErrors[provider] = error.localizedDescription; return false }
+        cachedAPIKeys[provider] = key
+        refreshTokens[provider] = UUID()
+        if provider == .anthropic { hasAnthropicAPIKey = true } else { hasOpenAIAPIKey = true }
+        models.removeAll { $0.provider == provider }
+        modelsLastFetched[provider] = nil
+        modelErrors[provider] = nil
         persistModels()
+        Task { await refreshModels(for: provider) }
+        return true
     }
 
-    // MARK: - Models
+    func removeAPIKey(provider: RewriteProvider) {
+        do { try KeychainService.delete(provider: provider) }
+        catch { modelErrors[provider] = error.localizedDescription; return }
+        refreshTokens[provider] = UUID() // discard any response still arriving for the removed key
+        refreshingProviders.remove(provider)
+        cachedAPIKeys[provider] = nil
+        if provider == .anthropic { hasAnthropicAPIKey = false } else { hasOpenAIAPIKey = false }
+        models.removeAll { $0.provider == provider }
+        modelsLastFetched[provider] = nil
+        modelErrors[provider] = nil
+        persistModels()
+        reconcileModelSelection()
+    }
 
     func refreshModels() async {
-        guard let key = apiKey(), !key.isEmpty else {
-            notify("Add your API key first.")
+        await withTaskGroup(of: Void.self) { group in
+            for provider in configuredProviders {
+                group.addTask { await self.refreshModels(for: provider) }
+            }
+            await group.waitForAll()
+        }
+    }
+
+    func refreshModels(for provider: RewriteProvider) async {
+        guard hasAPIKey(for: provider), let key = apiKey(for: provider), !key.isEmpty else {
+            modelErrors[provider] = "Add your \(provider.displayName) API key first."
             return
         }
+        let token = UUID()
+        refreshTokens[provider] = token
+        refreshingProviders.insert(provider)
+        modelErrors[provider] = nil
+        defer {
+            if refreshTokens[provider] == token { refreshingProviders.remove(provider) }
+        }
         do {
-            let list = try await AnthropicClient(apiKey: key).listModels()
-            models = list
-            modelsLastFetched = Date()
-            persistModels()
-            if selectedModelID.isEmpty || !list.contains(where: { $0.id == selectedModelID }) {
-                selectedModelID = AnthropicModel.preferredDefault(from: list)
+            let list: [RewriteModel]
+            switch provider {
+            case .anthropic:
+                list = try await AnthropicClient(apiKey: key).listModels().map {
+                    RewriteModel(provider: .anthropic, modelID: $0.id, displayName: $0.displayName)
+                }
+            case .openai:
+                list = try await OpenAIClient(apiKey: key).listModels()
             }
+            guard refreshTokens[provider] == token, hasAPIKey(for: provider) else { return }
+            models.removeAll { $0.provider == provider }
+            models.append(contentsOf: list)
+            modelsLastFetched[provider] = Date()
+            if list.isEmpty { modelErrors[provider] = "No text rewriting models are available for this key." }
+            persistModels()
+            reconcileModelSelection()
         } catch {
-            notify(error.localizedDescription)
+            guard refreshTokens[provider] == token, hasAPIKey(for: provider) else { return }
+            modelErrors[provider] = error.localizedDescription
         }
     }
 
@@ -793,6 +796,7 @@ final class AppState: ObservableObject {
 
     func clearHistory() {
         history = []
+        lastGeneratedText = nil
         persistHistory()
     }
 
@@ -829,6 +833,7 @@ final class AppState: ObservableObject {
             instructions = Instruction.defaults
             defaults.set(true, forKey: Keys.seeded)
             persistInstructions()
+            defaults.set(Instruction.defaultsRevision, forKey: Keys.instructionDefaultsRevision)
             // Bind "Auto Clean" (the first default) to ⇧⌘R out of the box.
             if let autoClean = instructions.first {
                 KeyboardShortcuts.setShortcut(
@@ -842,16 +847,15 @@ final class AppState: ObservableObject {
             migrateDefaultInstructionsIfNeeded()
         } else {
             instructions = Instruction.defaults
+            persistInstructions()
+            defaults.set(Instruction.defaultsRevision, forKey: Keys.instructionDefaultsRevision)
         }
 
-        // The shared base prompt (mechanics). Falls back to the shipped default for existing installs.
-        baseSystemPrompt = defaults.string(forKey: Keys.baseSystemPrompt) ?? Instruction.baseSystemPromptDefault
+        // Upgrade the exact previous default; retain user-authored base instructions.
+        baseSystemPrompt = Instruction.migratedBaseSystemPrompt(defaults.string(forKey: Keys.baseSystemPrompt))
 
-        selectedModelID = defaults.string(forKey: Keys.selectedModel) ?? ""
-        if let raw = defaults.string(forKey: Keys.rewriteProvider), let p = RewriteProvider(rawValue: raw) {
-            rewriteProvider = p
-        }
-        fallbackEnabled = defaults.object(forKey: Keys.fallbackEnabled) as? Bool ?? false
+        selectedModelID = RewriteModel.migratedSelection(saved: defaults.string(forKey: Keys.selectedModel),
+            legacyAnthropicID: defaults.string(forKey: "selectedModelID"))
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         keepHistory = defaults.object(forKey: Keys.keepHistory) as? Bool ?? true
         history = HistoryStore.load()
@@ -859,26 +863,37 @@ final class AppState: ObservableObject {
         if let idString = defaults.string(forKey: Keys.dictationCleanupInstruction) {
             dictationCleanupInstructionID = UUID(uuidString: idString)
         }
+        if let id = dictationCleanupInstructionID, !instructions.contains(where: { $0.id == id }) {
+            dictationCleanupInstructionID = nil
+        }
 
         if let data = defaults.data(forKey: Keys.models),
-           let list = try? JSONDecoder().decode([AnthropicModel].self, from: data) {
+           let list = try? JSONDecoder().decode([RewriteModel].self, from: data) {
             models = list
+        } else if let data = defaults.data(forKey: "cachedModels"),
+                  let list = try? JSONDecoder().decode([AnthropicModel].self, from: data) {
+            models = list.map { RewriteModel(provider: .anthropic, modelID: $0.id, displayName: $0.displayName) }
         }
-        modelsLastFetched = defaults.object(forKey: Keys.modelsFetched) as? Date
+        for provider in RewriteProvider.allCases {
+            modelsLastFetched[provider] = defaults.object(forKey: "modelsLastFetched." + provider.rawValue) as? Date
+        }
+        if modelsLastFetched[.anthropic] == nil {
+            modelsLastFetched[.anthropic] = defaults.object(forKey: "modelsLastFetched") as? Date
+        }
+
     }
 
-    /// Bring *unedited* seeded instructions up to the current style-only defaults so the new wording
-    /// (and the shared base prompt) reaches existing installs, not just fresh ones. Only prompts that
-    /// exactly match a previous default are upgraded. Anything the user has customized is left untouched.
+    /// One-time defaults upgrade. Retire untouched presets and introduce Rewrite without replacing
+    /// custom prompts or re-adding a default that the user subsequently deletes.
     private func migrateDefaultInstructionsIfNeeded() {
-        var changed = false
-        for i in instructions.indices {
-            if let upgraded = Instruction.legacyDefaultPromptMigrations[instructions[i].systemPrompt] {
-                instructions[i].systemPrompt = upgraded
-                changed = true
-            }
+        guard defaults.integer(forKey: Keys.instructionDefaultsRevision) < Instruction.defaultsRevision else { return }
+        let previous = instructions
+        instructions = Instruction.migratedDefaults(previous)
+        for removed in previous where !instructions.contains(where: { $0.id == removed.id }) {
+            KeyboardShortcuts.reset(KeyboardShortcuts.Name(removed.shortcutKey))
         }
-        if changed { persistInstructions() }
+        if instructions != previous { persistInstructions() }
+        defaults.set(Instruction.defaultsRevision, forKey: Keys.instructionDefaultsRevision)
     }
 
     /// Restores the base system prompt to its shipped default.
@@ -894,7 +909,9 @@ final class AppState: ObservableObject {
         if let data = try? JSONEncoder().encode(models) {
             defaults.set(data, forKey: Keys.models)
         }
-        defaults.set(modelsLastFetched, forKey: Keys.modelsFetched)
+        for provider in RewriteProvider.allCases {
+            defaults.set(modelsLastFetched[provider], forKey: "modelsLastFetched." + provider.rawValue)
+        }
     }
 
     // MARK: - Spinner

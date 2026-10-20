@@ -1,49 +1,52 @@
 import Foundation
 import Security
+import DictidyKit
 
-/// Stores the Anthropic API key in the macOS Keychain (generic password item).
+/// Provider keys use separate accounts; the existing Anthropic account is retained unchanged.
 enum KeychainService {
-    private static let service = "com.opensource.dictidy"
-    private static let account = "anthropic-api-key"
-
-    private static var baseQuery: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-    }
-
-    static func save(_ key: String) {
-        SecItemDelete(baseQuery as CFDictionary)
-        var attrs = baseQuery
-        attrs[kSecValueData as String] = Data(key.utf8)
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attrs as CFDictionary, nil)
-    }
-
-    static func load() -> String? {
-        var query = baseQuery
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let str = String(data: data, encoding: .utf8) else {
-            return nil
+    struct KeychainError: LocalizedError {
+        let status: OSStatus
+        var errorDescription: String? {
+            "Couldn't update the API key in Keychain: " + (SecCopyErrorMessageString(status, nil) as String? ?? "error \(status)")
         }
-        return str
     }
 
-    /// True if a key is stored, WITHOUT reading the secret. Checking for the item's presence
-    /// doesn't decrypt it, so — unlike `load()` — macOS never shows a Keychain authorization
-    /// prompt. Use this for setup/UI state; only read the actual value when about to use it.
-    static func exists() -> Bool {
-        SecItemCopyMatching(baseQuery as CFDictionary, nil) == errSecSuccess
+    private static func query(_ provider: RewriteProvider) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "com.opensource.dictidy",
+         kSecAttrAccount as String: provider == .anthropic ? "anthropic-api-key" : "openai-api-key"]
     }
 
-    static func delete() {
-        SecItemDelete(baseQuery as CFDictionary)
+    static func save(_ key: String, provider: RewriteProvider) throws {
+        let base = query(provider)
+        let value = [kSecValueData as String: Data(key.utf8)]
+        var status = SecItemUpdate(base as CFDictionary, value as CFDictionary)
+        if status == errSecItemNotFound {
+            var attrs = base
+            attrs[kSecValueData as String] = Data(key.utf8)
+            attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            status = SecItemAdd(attrs as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw KeychainError(status: status) }
+    }
+
+    static func load(provider: RewriteProvider) -> String? {
+        var request = query(provider)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Check presence without decrypting the key or asking for authorization at launch.
+    static func exists(provider: RewriteProvider) -> Bool {
+        SecItemCopyMatching(query(provider) as CFDictionary, nil) == errSecSuccess
+    }
+
+    static func delete(provider: RewriteProvider) throws {
+        let status = SecItemDelete(query(provider) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
     }
 }

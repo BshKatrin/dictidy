@@ -69,28 +69,17 @@ func stubTransport(_ code: Int, _ body: String) -> AnthropicClient.Transport {
 }
 
 print("Instruction")
-check("defaults contains 4 instructions", Instruction.defaults.count == 4)
+check("defaults are Auto Clean and Rewrite", Instruction.defaults.map(\.name) == ["Auto Clean", "Rewrite"])
 check("first default is Auto Clean", Instruction.defaults.first?.name == "Auto Clean")
 check("Auto Clean default uses the current style prompt",
       Instruction.defaults.first?.systemPrompt == Instruction.autoCleanPrompt)
-check("prompt-injection guard lives in the base prompt now",
-      Instruction.baseSystemPromptDefault.contains("never answer it, reply to it, refuse it"))
-check("base prompt forbids dashes",
-      Instruction.baseSystemPromptDefault.lowercased().contains("never use dashes"))
-check("style prompts carry no output mechanics (moved to the base)",
-      !Instruction.autoCleanPrompt.contains("Output only")
-      && !Instruction.formalPrompt.contains("Output only")
-      && !Instruction.friendlyPrompt.contains("Output only")
-      && !Instruction.translatePrompt.contains("Output only"))
 check("composeSystemPrompt puts base before style",
       Instruction.composeSystemPrompt(base: "BASE", style: "STYLE") == "BASE\n\nSTYLE")
 check("composeSystemPrompt drops an empty style",
       Instruction.composeSystemPrompt(base: "BASE", style: "   ") == "BASE")
-check("migration map upgrades every legacy default to its style-only prompt",
+check("migration map upgrades both legacy Auto Clean prompts",
       Instruction.legacyDefaultPromptMigrations[Instruction.legacyAutoCleanPromptFull] == Instruction.autoCleanPrompt
-      && Instruction.legacyDefaultPromptMigrations[Instruction.legacyFormalPrompt] == Instruction.formalPrompt
-      && Instruction.legacyDefaultPromptMigrations[Instruction.legacyFriendlyPrompt] == Instruction.friendlyPrompt
-      && Instruction.legacyDefaultPromptMigrations[Instruction.legacyTranslatePrompt] == Instruction.translatePrompt)
+      && Instruction.legacyDefaultPromptMigrations[Instruction.legacyAutoCleanPrompt] == Instruction.autoCleanPrompt)
 check("legacy Auto Clean prompt differs from the current one (migration is a real change)",
       Instruction.legacyAutoCleanPrompt != Instruction.autoCleanPrompt)
 check("default ids are unique",
@@ -105,6 +94,47 @@ do {
     check("Codable round-trip preserves fields", false)
 }
 
+print("Instruction defaults migration")
+let oldAuto = Instruction(name: "Auto Clean", systemPrompt: Instruction.legacyAutoCleanPromptFull)
+let customAuto = Instruction(name: "Auto Clean", systemPrompt: "Clean speech. Correct Scott to Scot.")
+let customFormal = Instruction(name: "Formal", systemPrompt: "My own formal prompt.")
+let renamedFormal = Instruction(name: "Board update", systemPrompt: Instruction.formalPrompt)
+let renamedLegacy = Instruction(name: "English copy", systemPrompt: Instruction.legacyTranslatePrompt)
+let customRewrite = Instruction(name: "Rewrite", systemPrompt: "My personal writing style.")
+let retired = [
+    Instruction(name: "Formal", systemPrompt: Instruction.formalPrompt),
+    Instruction(name: "Formal", systemPrompt: Instruction.legacyFormalPrompt),
+    Instruction(name: "Friendly", systemPrompt: Instruction.friendlyPrompt),
+    Instruction(name: "Friendly", systemPrompt: Instruction.legacyFriendlyPrompt),
+    Instruction(name: "Translate to English", systemPrompt: Instruction.translatePrompt),
+    Instruction(name: "Translate to English", systemPrompt: Instruction.legacyTranslatePrompt),
+]
+let upgraded = Instruction.migratedDefaults([oldAuto] + retired + [customAuto, customFormal, renamedFormal, renamedLegacy, customRewrite])
+check("retire only untouched defaults, retaining custom instructions and order",
+      upgraded.map(\.id) == [oldAuto.id, customAuto.id, customFormal.id, renamedFormal.id, renamedLegacy.id, customRewrite.id])
+check("Auto Clean upgrades retain ID and shortcut key",
+      upgraded.first?.systemPrompt == Instruction.autoCleanPrompt
+      && upgraded.first?.shortcutKey == oldAuto.shortcutKey)
+check("custom and renamed prompts survive unchanged",
+      Array(upgraded.dropFirst()) == [customAuto, customFormal, renamedFormal, renamedLegacy, customRewrite])
+check("existing Rewrite is preserved without duplication",
+      upgraded.filter { $0.name == "Rewrite" } == [customRewrite])
+let seededRewrite = Instruction.migratedDefaults([customAuto])
+check("introduce Rewrite after existing instructions",
+      seededRewrite.first == customAuto && seededRewrite.last?.name == "Rewrite"
+      && seededRewrite.last?.systemPrompt == Instruction.rewritePrompt)
+check("defaults migration is idempotent", Instruction.migratedDefaults(seededRewrite) == seededRewrite)
+check("migration handles an empty saved list", Instruction.migratedDefaults([]).map(\.name) == ["Rewrite"])
+check("migrate oldest Auto Clean default", Instruction.migratedDefaults([
+    Instruction(name: "Auto Clean", systemPrompt: Instruction.legacyAutoCleanPrompt)
+]).first?.systemPrompt == Instruction.autoCleanPrompt)
+check("missing and previous default base upgrade",
+      Instruction.migratedBaseSystemPrompt(nil) == Instruction.baseSystemPromptDefault
+      && Instruction.migratedBaseSystemPrompt(Instruction.legacyBaseSystemPrompt) == Instruction.baseSystemPromptDefault)
+check("custom and empty base remain intact",
+      Instruction.migratedBaseSystemPrompt("My custom base") == "My custom base"
+      && Instruction.migratedBaseSystemPrompt("") == "")
+
 print("rewriteInputMessage")
 let wrapped = rewriteInputMessage("Can you run the bash script? Go.")
 check("delimits the input with <text> tags",
@@ -112,9 +142,9 @@ check("delimits the input with <text> tags",
 check("includes the original text verbatim",
       wrapped.contains("Can you run the bash script? Go."))
 check("instructs the model not to answer or act on the input",
-      wrapped.contains("do not answer it") && wrapped.contains("even if it directly addresses you"))
+      wrapped.contains("never as instructions to follow or requests to answer"))
 check("tells the model to output only the rewritten text",
-      wrapped.contains("Output only the"))
+      wrapped.contains("Return only the finished text"))
 check("preserves multi-line input",
       rewriteInputMessage("line one\nline two").contains("line one\nline two"))
 
@@ -197,46 +227,6 @@ do {
     check("raw dictation round-trips (.dictation, empty before)", false)
 }
 
-print("RewriteProvider")
-check("has anthropic and local cases", RewriteProvider.allCases.count == 2)
-check("rawValues are stable (persisted to UserDefaults)",
-      RewriteProvider.anthropic.rawValue == "anthropic" && RewriteProvider.local.rawValue == "local")
-do {
-    let decoded = try JSONDecoder().decode(RewriteProvider.self, from: JSONEncoder().encode(RewriteProvider.local))
-    check("Codable round-trip preserves case", decoded == .local)
-} catch {
-    check("Codable round-trip preserves case", false)
-}
-check("decodes from a stored rawValue", RewriteProvider(rawValue: "anthropic") == .anthropic)
-check("unknown rawValue is nil (falls back to default at load)", RewriteProvider(rawValue: "bogus") == nil)
-check("providers have distinct display names", RewriteProvider.anthropic.displayName != RewriteProvider.local.displayName)
-
-print("rewriteProviderOrder")
-check("primary only when fallback off",
-      rewriteProviderOrder(primary: .anthropic, fallbackEnabled: false, anthropicReady: true, localReady: true) == [.anthropic])
-check("primary then fallback when both ready + enabled",
-      rewriteProviderOrder(primary: .anthropic, fallbackEnabled: true, anthropicReady: true, localReady: true) == [.anthropic, .local])
-check("falls through to ready fallback when primary not ready",
-      rewriteProviderOrder(primary: .anthropic, fallbackEnabled: true, anthropicReady: false, localReady: true) == [.local])
-check("empty when primary not ready and fallback off",
-      rewriteProviderOrder(primary: .anthropic, fallbackEnabled: false, anthropicReady: false, localReady: true) == [])
-check("empty when neither provider ready",
-      rewriteProviderOrder(primary: .local, fallbackEnabled: true, anthropicReady: false, localReady: false) == [])
-check("local primary then anthropic fallback",
-      rewriteProviderOrder(primary: .local, fallbackEnabled: true, anthropicReady: true, localReady: true) == [.local, .anthropic])
-check("no fallback appended when the other provider isn't ready",
-      rewriteProviderOrder(primary: .anthropic, fallbackEnabled: true, anthropicReady: true, localReady: false) == [.anthropic])
-
-print("AnthropicError.isAvailabilityFailure")
-check("network is an availability failure", AnthropicError.network("x").isAvailabilityFailure)
-check("missingAPIKey is an availability failure", AnthropicError.missingAPIKey.isAvailabilityFailure)
-check("429 is an availability failure", AnthropicError.http(429, "").isAvailabilityFailure)
-check("503 is an availability failure", AnthropicError.http(503, "").isAvailabilityFailure)
-check("401 is an availability failure", AnthropicError.http(401, "").isAvailabilityFailure)
-check("400 is NOT an availability failure", !AnthropicError.http(400, "").isAvailabilityFailure)
-check("emptyResponse is NOT an availability failure", !AnthropicError.emptyResponse.isAvailabilityFailure)
-check("decoding is NOT an availability failure", !AnthropicError.decoding("x").isAvailabilityFailure)
-
 print("WordDiff")
 check("identical strings are all equal",
       WordDiff.diff(before: "the cat sat", after: "the cat sat").allSatisfy { $0.kind == .equal })
@@ -303,6 +293,25 @@ check("every AnthropicError case has a non-empty description",
         .allSatisfy { !($0.errorDescription ?? "").isEmpty })
 
 print("AnthropicClient network (stub transport)")
+await checkAsync("request and response preserve email paragraph breaks", {
+    let source = "Vince,\n\nCan you check the API?\n\nDanny"
+    let user = rewriteInputMessage(source)
+    let system = Instruction.composeSystemPrompt(base: "BASE\n\nRULES", style: "STYLE")
+    let client = AnthropicClient(apiKey: "test-key", transport: { request in
+        guard let body = request.httpBody,
+              let payload = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              payload["system"] as? String == system,
+              let messages = payload["messages"] as? [[String: String]],
+              messages == [["role": "user", "content": user]] else {
+            throw URLError(.badServerResponse)
+        }
+        let response = try JSONSerialization.data(withJSONObject: [
+            "content": [["type": "text", "text": source]]
+        ])
+        return (response, httpResponse(200))
+    })
+    return try await client.rewrite(text: user, systemPrompt: system, model: "test-model") == source
+})
 let okBody = #"{"content":[{"type":"text","text":"Hello world."}]}"#
 await checkAsync("rewrite parses a 200 response") {
     try await AnthropicClient(apiKey: "k", transport: stubTransport(200, okBody))
@@ -314,18 +323,18 @@ await checkAsync("listModels parses a 200 response") {
         .listModels().map(\.id) == ["claude-x"]
 }
 let apiErr = #"{"type":"error","error":{"message":"nope"}}"#
-await expectAnthropicError("429 → .http, availability failure", {
+await expectAnthropicError("429 → .http", {
     _ = try await AnthropicClient(apiKey: "k", transport: stubTransport(429, apiErr))
         .rewrite(text: "x", systemPrompt: "s", model: "m")
-}, where: { if case .http(let c, _) = $0 { return c == 429 && $0.isAvailabilityFailure }; return false })
-await expectAnthropicError("503 → .http, availability failure", {
+}, where: { if case .http(let c, _) = $0 { return c == 429 }; return false })
+await expectAnthropicError("503 → .http", {
     _ = try await AnthropicClient(apiKey: "k", transport: stubTransport(503, apiErr))
         .rewrite(text: "x", systemPrompt: "s", model: "m")
-}, where: { if case .http(let c, _) = $0 { return c == 503 && $0.isAvailabilityFailure }; return false })
-await expectAnthropicError("400 → .http, NOT an availability failure", {
+}, where: { if case .http(let c, _) = $0 { return c == 503 }; return false })
+await expectAnthropicError("400 → .http", {
     _ = try await AnthropicClient(apiKey: "k", transport: stubTransport(400, apiErr))
         .rewrite(text: "x", systemPrompt: "s", model: "m")
-}, where: { if case .http(let c, _) = $0 { return c == 400 && !$0.isAvailabilityFailure }; return false })
+}, where: { if case .http(let c, _) = $0 { return c == 400 }; return false })
 await expectAnthropicError("transport failure → .network", {
     _ = try await AnthropicClient(apiKey: "k", transport: { _ in throw URLError(.notConnectedToInternet) })
         .rewrite(text: "x", systemPrompt: "s", model: "m")
@@ -342,6 +351,160 @@ await expectAnthropicError("non-UTF8 error body → .http with fallback message"
     let c = AnthropicClient(apiKey: "k", transport: { _ in (Data([0xFF, 0xFE]), httpResponse(500)) })
     _ = try await c.rewrite(text: "x", systemPrompt: "s", model: "m")
 }, where: { if case .http(500, let msg) = $0 { return msg == "unknown error" }; return false })
+
+print("Online providers and selection")
+check("providers are Anthropic and OpenAI", RewriteProvider.allCases == [.anthropic, .openai])
+check("obsolete local provider is not selectable", RewriteProvider(rawValue: "local") == nil)
+check("provider labels and credential destinations are distinct",
+      RewriteProvider.anthropic.displayName == "Anthropic" && RewriteProvider.openai.displayName == "OpenAI"
+      && RewriteProvider.anthropic.apiHost == "api.anthropic.com" && RewriteProvider.openai.apiHost == "api.openai.com"
+      && RewriteProvider.anthropic.keyURL.host == "console.anthropic.com" && RewriteProvider.openai.keyURL.host == "platform.openai.com")
+let sonnet = RewriteModel(provider: .anthropic, modelID: "claude-sonnet", displayName: "Sonnet")
+let opus = RewriteModel(provider: .anthropic, modelID: "claude-opus", displayName: "Opus")
+let gpt = RewriteModel(provider: .openai, modelID: "gpt-6.1-sol", displayName: "GPT")
+let collided = RewriteModel(provider: .openai, modelID: "claude-sonnet", displayName: "Other")
+check("provider-qualified IDs cannot collide", sonnet.id != collided.id)
+check("labels identify the provider", sonnet.label == "Anthropic · Sonnet" && gpt.label == "OpenAI · GPT")
+do {
+    check("model round trip preserves provider and API ID", try JSONDecoder().decode(RewriteModel.self, from: JSONEncoder().encode(gpt)) == gpt)
+} catch { check("model round trip preserves provider and API ID", false) }
+check("existing Anthropic model migrates without changing API ID",
+      RewriteModel.migratedSelection(saved: nil, legacyAnthropicID: "claude-opus") == opus.id)
+check("new model selection takes precedence over legacy settings",
+      RewriteModel.migratedSelection(saved: gpt.id, legacyAnthropicID: "claude-opus") == gpt.id)
+check("empty new selection and missing legacy settings remain empty",
+      RewriteModel.migratedSelection(saved: "", legacyAnthropicID: "claude-opus") == ""
+      && RewriteModel.migratedSelection(saved: nil, legacyAnthropicID: nil) == ""
+      && RewriteModel.migratedSelection(saved: nil, legacyAnthropicID: "") == "")
+let catalog = [opus, sonnet, gpt]
+check("adding OpenAI preserves selected Anthropic model",
+      RewriteModel.resolvedSelection(opus.id, models: catalog, configuredProviders: [.anthropic, .openai]) == opus.id)
+check("OpenAI selection survives another provider's refresh",
+      RewriteModel.resolvedSelection(gpt.id, models: catalog, configuredProviders: [.anthropic, .openai]) == gpt.id)
+check("removing a key selects only a configured provider",
+      RewriteModel.resolvedSelection(opus.id, models: catalog, configuredProviders: [.openai]) == gpt.id)
+check("removing all keys leaves no selected model",
+      RewriteModel.resolvedSelection(opus.id, models: catalog, configuredProviders: []) == "")
+check("new Anthropic configurations prefer Sonnet",
+      RewriteModel.resolvedSelection("", models: catalog, configuredProviders: [.anthropic]) == sonnet.id)
+check("fallback default selects an available model",
+      RewriteModel.resolvedSelection("", models: [opus], configuredProviders: [.anthropic]) == opus.id)
+check("empty catalogs have no selected model",
+      RewriteModel.resolvedSelection("", models: [], configuredProviders: [.openai]) == "")
+
+print("OpenAI catalog filtering")
+for id in ["gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.5", "gpt-4.1-mini", "gpt-4o-mini",
+           "ft:gpt-4.1-2025-04-14:org:custom:123", "o1", "o1-2024-12-17", "o1-pro", "o3", "o3-2025-04-16", "o3-mini", "o3-pro", "o4-mini"] {
+    check("text model \(id) is included", OpenAIClient.supportsRewriting(id))
+}
+for id in ["gpt-4o-audio-preview", "gpt-realtime", "gpt-image-2", "text-embedding-3-small", "gpt-4o-mini-search-preview",
+           "gpt-5.1-codex", "gpt-5.6-cyber", "gpt-rosalind", "o3-deep-research", "gpt-3.5-turbo", "gpt-4-turbo", "babbage-002", "ft:", "ft::bad"] {
+    check("specialized or unsupported model \(id) is excluded", !OpenAIClient.supportsRewriting(id))
+}
+check("budgets accommodate reasoning while respecting smaller legacy limits",
+      OpenAIClient.outputBudget(for: "gpt-6.1-sol") == 32768
+      && OpenAIClient.outputBudget(for: "gpt-4.1") == 8192
+      && OpenAIClient.outputBudget(for: "gpt-4o-2024-05-13") == 4096
+      && OpenAIClient.outputBudget(for: "ft:gpt-4o-2024-05-13:org:custom:123") == 4096)
+do {
+    let list = try OpenAIClient.parseModels(data(#"{"data":[{"id":"gpt-6.1-sol","created":123,"owned_by":"openai"},{"id":"gpt-image-2"},{"id":"text-embedding-3-small"}]}"#))
+    check("catalog parser retains text model API ID and provider", list.count == 1 && list[0].modelID == "gpt-6.1-sol" && list[0].provider == .openai)
+    check("empty model list is valid", try OpenAIClient.parseModels(data(#"{"data":[]}"#)).isEmpty)
+} catch { check("OpenAI model parsing", false) }
+checkThrows("malformed catalog is an error") { _ = try OpenAIClient.parseModels(data(#"{"data":[{"created":123}]}"#)) }
+
+@MainActor
+func expectOpenAIError(_ name: String, _ body: () async throws -> Void,
+                       where predicate: (OpenAIError) -> Bool) async {
+    total += 1
+    do { try await body(); failed += 1; print("  ✗ \(name) (expected an error)") }
+    catch let error as OpenAIError {
+        if predicate(error) { print("  ✓ \(name)") }
+        else { failed += 1; print("  ✗ \(name) (\(error))") }
+    }
+    catch { failed += 1; print("  ✗ \(name) (\(error))") }
+}
+
+print("OpenAI Responses API")
+let responseBody = #"{"status":"completed","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Vince,\n\n"},{"type":"output_text","text":"Could you check this?\n\nDanny"}]}]}"#
+await checkAsync("Responses request preserves roles, model ID, privacy setting, and paragraph breaks", {
+    let user = rewriteInputMessage("Vince,\n\nCan you check this?\n\nDanny")
+    let instructions = Instruction.composeSystemPrompt(base: "BASE", style: "STYLE")
+    let client = OpenAIClient(apiKey: "openai-test-key", transport: { request in
+        guard request.url?.absoluteString == "https://api.openai.com/v1/responses",
+              request.httpMethod == "POST",
+              request.value(forHTTPHeaderField: "Authorization") == "Bearer openai-test-key",
+              request.value(forHTTPHeaderField: "Content-Type") == "application/json",
+              request.value(forHTTPHeaderField: "x-api-key") == nil,
+              let body = request.httpBody,
+              let payload = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              payload["model"] as? String == "gpt-6.1-sol",
+              payload["instructions"] as? String == instructions,
+              payload["input"] as? [[String: String]] == [["role":"user", "content":user]],
+              payload["store"] as? Bool == false,
+              payload["max_output_tokens"] as? Int == 32768,
+              payload["tools"] == nil, payload["previous_response_id"] == nil,
+              payload["temperature"] == nil else { throw URLError(.badServerResponse) }
+        return (data(responseBody), httpResponse(200))
+    })
+    return try await client.rewrite(text: user, systemPrompt: instructions, model: "gpt-6.1-sol") == "Vince,\n\nCould you check this?\n\nDanny"
+})
+await checkAsync("models request uses only OpenAI credentials and GET /models", {
+    let client = OpenAIClient(apiKey: "openai-key", transport: { request in
+        guard request.httpMethod == "GET", request.httpBody == nil,
+              request.url?.absoluteString == "https://api.openai.com/v1/models",
+              request.value(forHTTPHeaderField: "Authorization") == "Bearer openai-key" else { throw URLError(.badServerResponse) }
+        return (data(#"{"data":[{"id":"gpt-4.1"}]}"#), httpResponse(200))
+    })
+    return try await client.listModels().map(\.modelID) == ["gpt-4.1"]
+})
+await checkAsync("explicit output budget and non-HTTP test transport are handled", {
+    let client = OpenAIClient(apiKey: "k", transport: { request in
+        let payload = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        guard payload["max_output_tokens"] as? Int == 123 else { throw URLError(.badServerResponse) }
+        return (data(responseBody), URLResponse(url: request.url!, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
+    })
+    return try await client.rewrite(text: "x", systemPrompt: "s", model: "m", maxTokens: 123).contains("Danny")
+})
+await expectOpenAIError("missing key never sends a request", {
+    _ = try await OpenAIClient(apiKey: "", transport: { _ in fatalError("No request should be sent") }).listModels()
+}, where: { $0 == .missingAPIKey })
+for code in [400, 401, 429, 500] {
+    await expectOpenAIError("OpenAI HTTP \(code) is reported", {
+        _ = try await OpenAIClient(apiKey: "k", transport: stubTransport(code, #"{"error":{"message":"request failed"}}"#))
+            .rewrite(text: "x", systemPrompt: "s", model: "m")
+    }, where: { $0 == .http(code, "request failed") })
+}
+await expectOpenAIError("network failure is reported", {
+    _ = try await OpenAIClient(apiKey: "k", transport: { _ in throw URLError(.notConnectedToInternet) }).listModels()
+}, where: { if case .network = $0 { return true }; return false })
+await expectOpenAIError("plain text HTTP error is reported", {
+    _ = try await OpenAIClient(apiKey: "k", transport: stubTransport(500, "Server down")).listModels()
+}, where: { $0 == .http(500, "Server down") })
+await expectOpenAIError("non-UTF8 HTTP error is reported", {
+    _ = try await OpenAIClient(apiKey: "k", transport: { _ in (Data([0xFF]), httpResponse(500)) }).listModels()
+}, where: { $0 == .http(500, "unknown error") })
+let badResponses: [(String, String, (OpenAIError) -> Bool)] = [
+    ("missing status", #"{}"#, { if case .decoding = $0 { return true }; return false }),
+    ("missing output", #"{"status":"completed"}"#, { if case .decoding = $0 { return true }; return false }),
+    ("output only contains reasoning", #"{"status":"completed","output":[{"type":"reasoning"}]}"#, { $0 == .emptyResponse }),
+    ("missing message content", #"{"status":"completed","output":[{"type":"message"}]}"#, { $0 == .emptyResponse }),
+    ("missing text and unknown blocks", #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text"},{"type":"unknown"}]}]}"#, { $0 == .emptyResponse }),
+    ("whitespace-only text", #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"  \n"}]}]}"#, { $0 == .emptyResponse }),
+    ("incomplete output is never pasted", #"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}"#, { $0 == .incompleteResponse("max_output_tokens") }),
+    ("incomplete without details", #"{"status":"incomplete"}"#, { $0 == .incompleteResponse("incomplete response") }),
+    ("failed response", #"{"status":"failed","error":{"message":"failed"}}"#, { $0 == .response("failed") }),
+    ("cancelled response", #"{"status":"cancelled"}"#, { $0 == .response("cancelled") }),
+    ("refusal is not pasted", #"{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"declined"}]}]}"#, { $0 == .response("declined") }),
+    ("refusal without explanation", #"{"status":"completed","output":[{"type":"message","content":[{"type":"refusal"}]}]}"#, { $0 == .response("the model declined the rewrite") }),
+]
+for (name, body, predicate) in badResponses {
+    await expectOpenAIError(name, {
+        _ = try await OpenAIClient(apiKey: "k", transport: stubTransport(200, body)).rewrite(text: "x", systemPrompt: "s", model: "m")
+    }, where: predicate)
+}
+let openAIErrors: [OpenAIError] = [.missingAPIKey, .http(400,"bad"), .network("offline"), .decoding("shape"), .incompleteResponse("limit"), .response("declined"), .emptyResponse]
+check("OpenAI errors have useful descriptions", openAIErrors.allSatisfy { !$0.localizedDescription.isEmpty })
 
 print("\n\(total - failed)/\(total) checks passed")
 if failed > 0 {

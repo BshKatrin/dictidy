@@ -15,16 +15,21 @@ before reporting, in case the issue is already fixed.
 
 ## Security posture
 
-Dictidy is designed to keep your data local:
+Dictidy keeps voice transcription local and sends rewrite text to your chosen API provider:
 
-- **Your Anthropic API key** is stored in the **macOS Keychain** and is only ever sent to
-  `api.anthropic.com` over HTTPS. It is never logged, transmitted elsewhere, or bundled into the app.
-- **Voice dictation and local rewriting run entirely on-device** (Whisper + llama.cpp). Audio is held in
-  memory only, never written to disk, and never leaves your Mac.
-- **No telemetry or analytics.** The only network calls are to the Anthropic API (rewrites), the
-  Hugging Face / GitHub download URLs for the on-device models, and the GitHub Releases API (update check).
-- **Accessibility access** is used solely to copy the selection and paste the result (synthetic ⌘C/⌘V);
-  nothing is recorded or inspected.
+- **API keys** are stored separately in the **macOS Keychain**. Anthropic keys are sent only to
+  `api.anthropic.com`; OpenAI keys only to `api.openai.com`, over HTTPS. Keys are never logged,
+  stored in preferences, or bundled into the app.
+- **Voice transcription runs entirely on-device** with Whisper. Audio is held in memory, never
+  written to disk, and never leaves your Mac. Dictate + Clean sends the transcript to the selected
+  rewrite provider after local transcription.
+- **Rewriting is online.** Selected text and configured instructions are sent to the provider of the
+  selected model. OpenAI requests set `store: false`; the provider’s own logging and retention policies
+  still apply. No conversation history or tools are sent.
+- **No telemetry or analytics.** Network calls are to the configured Anthropic/OpenAI APIs (model
+  catalogs and rewrites), Hugging Face / GitHub for the Whisper download, and GitHub for app updates.
+- **Accessibility access** copies the selection, restores the destination window and control for
+  Paste Last Text, and pastes the result (synthetic ⌘C/⌘V). Dictidy does not record keystrokes.
 
 ## A note on code signing
 

@@ -1,197 +1,112 @@
 import SwiftUI
 import DictidyKit
 
-/// One place to configure how selected text is rewritten: pick a primary provider (Claude API or the
-/// on-device model), optionally enable fallback, and set up each provider. The primary provider is
-/// shown expanded; the other collapses into a DisclosureGroup so the tab isn't a wall of controls.
 struct RewriteTab: View {
-    @EnvironmentObject var state: AppState
-    @State private var key: String = KeychainService.load() ?? ""
-    @State private var lastSavedKey: String = ""
-    @State private var didLoadKey = false
-    @State private var reveal = false
-    @State private var isRefreshing = false
+    var body: some View {
+        ScrollView { RewriteConfigurationView().padding() }
+    }
+}
 
-    private var trimmedKey: String { key.trimmingCharacters(in: .whitespacesAndNewlines) }
-    /// The field differs from what's saved — so "Save" is meaningful (else show a disabled "Saved").
-    private var keyIsDirty: Bool { trimmedKey != lastSavedKey }
+/// Shared by Settings and onboarding: either or both keys, one model selection.
+struct RewriteConfigurationView: View {
+    @EnvironmentObject var state: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Choose how selected text is rewritten — the Claude API, an on-device model, or "
-                     + "both with automatic fallback.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add an Anthropic or OpenAI API key, or both. Choose a model below to rewrite your text.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-                Picker("Primary", selection: $state.rewriteProvider) {
-                    ForEach(RewriteProvider.allCases, id: \.self) { provider in
-                        Text(provider.displayName).tag(provider)
+            ForEach(RewriteProvider.allCases, id: \.self) { provider in
+                ProviderKeyRow(provider: provider)
+                Divider()
+            }
+
+            Picker("Model", selection: $state.selectedModelID) {
+                if !state.availableModels.contains(where: { $0.id == state.selectedModelID }) {
+                    Text("Choose a model").tag(state.selectedModelID)
+                }
+                ForEach(RewriteProvider.allCases, id: \.self) { provider in
+                    let models = state.availableModels.filter { $0.provider == provider }
+                    if !models.isEmpty {
+                        Section(provider.displayName) {
+                            ForEach(models) { model in Text(model.label).tag(model.id) }
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
+            }
+            .pickerStyle(.menu)
+            .disabled(state.availableModels.isEmpty)
 
-                Toggle("Fall back to the other provider if the primary is unavailable",
-                       isOn: $state.fallbackEnabled)
-                Text(fallbackCaption)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button {
+                    Task { await state.refreshModels() }
+                } label: { Label("Refresh Models", systemImage: "arrow.clockwise") }
+                .disabled(state.configuredProviders.isEmpty || !state.refreshingProviders.isEmpty)
+                if !state.refreshingProviders.isEmpty { ProgressView().controlSize(.small) }
+            }
 
-                Divider()
+            if state.availableModels.isEmpty {
+                Text(state.configuredProviders.isEmpty ? "Save an API key to load models." : "No models loaded yet. Refresh Models to try again.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Text("Selected text is sent to the provider of the model you choose. API usage is billed by that provider. Voice transcription runs on your Mac.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
 
-                // Primary provider expanded; the other collapsed into a DisclosureGroup.
-                let primary = state.rewriteProvider
-                providerHeader(primary)
-                body(for: primary)
+private struct ProviderKeyRow: View {
+    @EnvironmentObject var state: AppState
+    let provider: RewriteProvider
+    // Do not decrypt existing keys just to display settings. Read each key only when its API is used.
+    @State private var key = ""
+    @State private var reveal = false
+    private var trimmedKey: String { key.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-                Divider()
-
-                DisclosureGroup {
-                    body(for: primary.other).padding(.top, 6)
-                } label: {
-                    providerHeader(primary.other)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(provider.displayName).font(.headline)
+                if state.refreshingProviders.contains(provider) {
+                    StatusBadge(.working, label: "Loading models…")
+                } else if state.hasAPIKey(for: provider) {
+                    StatusBadge(.ready, label: "Key saved")
                 }
             }
-            .padding()
-        }
-        .onAppear { if !didLoadKey { lastSavedKey = key; didLoadKey = true } }
-    }
-
-    // MARK: - Fallback caption
-
-    private var fallbackCaption: String {
-        let other = state.rewriteProvider.other
-        guard state.fallbackEnabled else {
-            return "Only \(state.rewriteProvider.displayName) is used."
-        }
-        let base = "If \(state.rewriteProvider.displayName) is unavailable, Dictidy uses \(other.displayName)."
-        let otherReady = other == .anthropic ? state.anthropicReady : state.localModelReady
-        return otherReady ? base : base + " Set it up below to enable this."
-    }
-
-    // MARK: - Provider header + body
-
-    @ViewBuilder private func providerHeader(_ provider: RewriteProvider) -> some View {
-        HStack(spacing: 8) {
-            Text(provider == .anthropic ? "Anthropic (Claude) API" : "Local (on-device) model").font(.headline)
-            providerBadge(provider)
-            Spacer()
-        }
-    }
-
-    @ViewBuilder private func providerBadge(_ provider: RewriteProvider) -> some View {
-        switch provider {
-        case .anthropic:
-            if state.anthropicReady { StatusBadge(.ready) } else { StatusBadge(.actionNeeded, label: "Not set up") }
-        case .local:
-            switch state.localModelStatus {
-            case .ready:       StatusBadge(.ready)
-            case .downloading: StatusBadge(.working, label: "Downloading…")
-            default:           StatusBadge(.actionNeeded, label: "Not downloaded")
-            }
-        }
-    }
-
-    @ViewBuilder private func body(for provider: RewriteProvider) -> some View {
-        switch provider {
-        case .anthropic: anthropicBody
-        case .local:     localBody
-        }
-    }
-
-    // MARK: - Anthropic (Claude) API
-
-    @ViewBuilder private var anthropicBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Your key is stored in the macOS Keychain and only ever sent to api.anthropic.com.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
+            Text("Your key is stored in macOS Keychain and used only with \(provider.apiHost).")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Group {
-                    if reveal { TextField("sk-ant-…", text: $key) }
-                    else { SecureField("sk-ant-…", text: $key) }
-                }
-                .textFieldStyle(.roundedBorder)
-                Button(reveal ? "Hide" : "Show") { reveal.toggle() }
+                    if reveal { TextField(placeholder, text: $key) }
+                    else { SecureField(placeholder, text: $key) }
+                }.textFieldStyle(.roundedBorder)
+                Button(reveal ? "Hide" : "Show") { reveal.toggle() }.disabled(key.isEmpty)
             }
-
             HStack {
-                if state.hasAPIKey && !keyIsDirty {
-                    Button("Saved") {}.disabled(true)
-                } else {
-                    Button("Save API Key") {
-                        state.saveAPIKey(trimmedKey); lastSavedKey = trimmedKey
-                    }
-                    .buttonStyle(.borderedProminent).disabled(trimmedKey.isEmpty)
-                }
-                Button("Remove") { state.removeAPIKey(); key = ""; lastSavedKey = "" }
-                    .disabled(!state.hasAPIKey)
+                Button("Save API Key") {
+                    if state.saveAPIKey(trimmedKey, provider: provider) { key = ""; reveal = false }
+                }.disabled(trimmedKey.isEmpty)
+                Button("Remove") {
+                    state.removeAPIKey(provider: provider)
+                    if !state.hasAPIKey(for: provider) { key = ""; reveal = false }
+                }.disabled(!state.hasAPIKey(for: provider))
                 Spacer()
-                Link("Get API Key", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
+                Link("Get API Key", destination: provider.keyURL)
             }
-
-            if state.models.isEmpty {
-                Text("No models loaded yet. Save your API key, then Refresh.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                Picker("Model", selection: $state.selectedModelID) {
-                    ForEach(state.models.sortedByDisplayName()) { model in
-                        Text(model.displayName).tag(model.id)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    isRefreshing = true
-                    Task { await state.refreshModels(); isRefreshing = false }
-                } label: { Label("Refresh Models", systemImage: "arrow.clockwise") }
-                    .disabled(isRefreshing || !state.hasAPIKey)
-
-                if isRefreshing {
-                    ProgressView().controlSize(.small)
-                } else if let date = state.modelsLastFetched {
-                    Text("Updated \(date.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            if let error = state.modelErrors[provider] {
+                Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            } else if let date = state.modelsLastFetched[provider], state.hasAPIKey(for: provider) {
+                Text("\(state.models.filter { $0.provider == provider }.count) models · Updated \(date.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    // MARK: - Local (on-device)
-
-    @ViewBuilder private var localBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Runs entirely on your Mac — no API key, and nothing leaves your device after the "
-                 + "one-time download.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
-            localModelRow
-
-            Text("Qwen3-4B-Instruct (Q4_K_M, ~2.5 GB). Loads on first use and unloads when idle to free memory.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder private var localModelRow: some View {
-        switch state.localModelStatus {
-        case .ready:
-            StatusBadge(.ready, label: "Downloaded")
-        case .missing:
-            Button("Download model (~2.5 GB)") { state.localModelStore.download() }
-                .buttonStyle(.borderedProminent)
-        case .downloading(let progress):
-            HStack(spacing: 10) {
-                ProgressView(value: progress).frame(maxWidth: 220)
-                Text("\(Int(progress * 100))%").font(.caption).monospacedDigit()
-                Button("Cancel") { state.localModelStore.cancel() }
-            }
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(message).font(.callout).foregroundStyle(.orange)
-                Button("Retry download") { state.localModelStore.download() }
-            }
-        }
+    private var placeholder: String {
+        if state.hasAPIKey(for: provider) { return "Key saved. Paste a new key to replace it." }
+        return provider == .anthropic ? "sk-ant-…" : "sk-…"
     }
 }

@@ -8,8 +8,8 @@
 Dictidy is a free, open-source macOS menu-bar app for voice dictation and text rewriting.
 
 Select text in any app, press a hotkey, and Dictidy rewrites it in place. Or press a dictation hotkey,
-speak, and Dictidy pastes the transcript at your cursor. Rewriting can use your Anthropic API key or an
-optional on-device model. Speech-to-text always runs on your Mac.
+speak, and Dictidy pastes the transcript at your cursor. Rewriting uses your Anthropic or OpenAI API
+key. Speech-to-text always runs on your Mac.
 
 **Quick links:** [Install](#install) | [First launch](#first-launch) | [Use Dictidy](#use-dictidy) | [Privacy](#privacy-and-storage) | [Build from source](#build-from-source)
 
@@ -23,8 +23,9 @@ optional on-device model. Speech-to-text always runs on your Mac.
 
 - Apple Silicon Mac
 - macOS 13.3 or later
-- Optional: an [Anthropic API key](https://console.anthropic.com/settings/keys) for cloud rewriting
-- Optional: about 2.5 GB for the local rewrite model and about 1.6 GB for the local dictation model
+- For rewriting: an [Anthropic API key](https://console.anthropic.com/settings/keys), an
+  [OpenAI API key](https://platform.openai.com/api-keys), or both
+- For dictation: about 1.6 GB for the local Whisper speech model
 
 ### Download and open
 
@@ -56,8 +57,8 @@ do not have to guess whether macOS permissions, keys, or model downloads worked.
 
 You can set up any mix of these:
 
-- **Cloud rewriting:** add your Anthropic API key and choose a Claude model.
-- **Local rewriting:** download the on-device rewrite model and rewrite without an API key.
+- **Rewriting:** add an Anthropic or OpenAI API key, or both. A single model menu lists available
+  text models from the providers you configure. Choose the model to use for every rewrite.
 - **Dictation:** download the Whisper model, grant Microphone access, and choose dictation shortcuts.
 
 Dictidy also needs **Accessibility** access so it can copy selected text and paste the result back into
@@ -91,7 +92,20 @@ with your selected rewrite provider.
 Open **Settings -> Instructions** to add, edit, reorder, duplicate, delete, or assign shortcuts to
 instructions. Each instruction can have its own name, style prompt, and global hotkey.
 
+The built-in choices are **Auto Clean**, for tidying dictated speech while keeping your voice, and
+**Rewrite**, for composing a clearer professional message with more freedom over wording and flow.
+Editable **Base instructions** supply shared rules for preserving meaning, returning only the result,
+and formatting emails. The selected style controls how much to change the writing.
+
+Existing custom instructions are preserved. An upgrade removes only untouched Formal, Friendly, and
+Translate to English presets and adds Rewrite if you do not already have an instruction with that name.
+
 ### Recover previous work
+
+If the latest output did not reach your text box, click in the box, open the Dictidy menu-bar icon,
+and choose **Paste Last Text**. It retries the latest rewrite or dictation at that cursor without
+generating again. The latest output is available until you quit Dictidy or clear history, including
+when history is turned off. Your clipboard restore setting also applies to this action.
 
 Open **History...** from the menu to recover recent rewrites and dictations. History is local and capped
 to the newest 100 entries.
@@ -102,13 +116,13 @@ to the newest 100 entries.
 
 - **Works anywhere you type.** Dictidy uses macOS copy and paste automation, so it works across Mail,
   Slack, Notes, browsers, editors, and most standard text fields.
-- **Rewrites existing text.** Clean up rough notes, change tone, translate to English, or create your
+- **Rewrites existing text.** Clean up rough notes, compose professional messages, or create your
   own instructions.
 - **Dictates locally.** Speech-to-text uses Whisper on your Mac. Audio is not uploaded.
-- **Runs without a subscription.** Dictidy is free and open source. You can use your own API key or
-  download the local rewrite model.
-- **Falls back when configured.** If both providers are set up, Dictidy can fall back from Claude to the
-  local model when the network or API is unavailable.
+- **Uses your own API keys.** Dictidy is free and open source. Rewriting is billed by the selected
+  provider; local voice transcription requires no API key.
+- **Offers one model menu.** Configure Anthropic, OpenAI, or both and choose among their available
+  text models. Refresh Models updates the list without changing a selection that is still available.
 - **Keeps setup visible.** The menu tells you what is missing and links directly to the relevant setup
   step.
 - **Has no telemetry.** Dictidy does not collect analytics.
@@ -121,10 +135,9 @@ to the newest 100 entries.
 |---|---|
 | Dictation audio | Processed on-device, kept in memory, not written to disk |
 | Whisper transcription | Produced on-device |
-| Local rewrite text | Processed on-device when using the local rewrite model |
-| Anthropic rewrite text | Sent to Anthropic only when you choose the Anthropic provider |
-| API key | Stored in the macOS Keychain |
-| Models | `~/Library/Application Support/Dictidy` |
+| Rewrite text, including Dictate + Clean transcripts | Sent to the provider of the selected model, Anthropic or OpenAI |
+| API keys | Stored separately in the macOS Keychain, sent only to their respective provider |
+| Whisper speech model | `~/Library/Application Support/Dictidy` |
 | Settings and instructions | `UserDefaults` under `com.opensource.dictidy` |
 | History | Local JSON in Application Support, newest 100 entries |
 
@@ -137,7 +150,7 @@ to the newest 100 entries.
 | Price | Free | Free tier, Pro paid | Free tier, Pro paid | Free |
 | Open source | Yes | No | No | No |
 | Dictation on-device | Yes | No | Yes | Yes |
-| Cleanup | On-device or your Claude key | Cloud | Cloud or your key | No |
+| Cleanup | Your Anthropic or OpenAI key | Cloud | Cloud or your key | No |
 | Rewrite existing selected text | Yes | No | No | No |
 | Works across apps | Yes | Yes | Yes | Yes |
 | Telemetry | No | Yes | Optional | Optional |
@@ -180,10 +193,11 @@ xattr -dr com.apple.quarantine /Applications/Dictidy.app
 Or open it once, dismiss the warning, then approve it in **System Settings -> Privacy & Security ->
 Open Anyway**.
 
-### Local rewrite says the model is not installed
+### Rewrite models are missing
 
-Open **Settings -> Rewrite**, set the primary provider to **Local (on-device)**, and click
-**Download model**. The model is about 2.5 GB and downloads once.
+Open **Settings -> Rewrite**, save an Anthropic or OpenAI API key, and click **Refresh Models**.
+Each provider shows its own loading status or error. Only providers with saved keys appear in the
+model menu. If a request fails, the original text stays in place; choose another model to try again.
 
 ### Dictation asks for the speech model
 
@@ -241,7 +255,7 @@ The test runner is dependency-free and works with Command Line Tools.
 ```text
 Sources/
   DictidyKit/        Pure models, prompts, API parsing, history, and diff logic
-  Dictidy/           Menu-bar app, settings UI, permissions, services, dictation, local LLM
+  Dictidy/           Menu-bar app, settings UI, permissions, services, dictation
   DictidyTests/      Dependency-free test runner
 Scripts/
   build-app.sh       Build and assemble Dictidy.app
@@ -259,8 +273,7 @@ Resources/
 | App shell | SwiftUI `MenuBarExtra`, no Dock icon |
 | Global hotkeys | [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts) |
 | Capture and replace | Synthetic Command-C, rewrite/transcribe, synthetic Command-V, then optional clipboard restore |
-| Cloud rewriting | Anthropic Messages API and Models API via `URLSession` |
-| Local rewriting | Qwen3-4B-Instruct via prebuilt `llama.cpp` XCFramework |
+| Rewriting | Anthropic Messages API or OpenAI Responses API, with live Models API catalogs via `URLSession` |
 | Speech-to-text | Whisper `large-v3-turbo` via prebuilt `whisper.cpp` XCFramework |
 | Audio capture | `AVAudioEngine` to 16 kHz mono samples |
 | Launch at login | `SMAppService.mainApp` |
@@ -286,7 +299,8 @@ rm -f  ~/Library/Preferences/com.opensource.dictidy.plist
 rm -rf ~/Library/Caches/com.opensource.dictidy
 rm -rf ~/Library/HTTPStorages/com.opensource.dictidy
 defaults delete com.opensource.dictidy 2>/dev/null || true
-security delete-generic-password -s com.opensource.dictidy 2>/dev/null || true
+security delete-generic-password -s com.opensource.dictidy -a anthropic-api-key 2>/dev/null || true
+security delete-generic-password -s com.opensource.dictidy -a openai-api-key 2>/dev/null || true
 tccutil reset Accessibility com.opensource.dictidy
 tccutil reset Microphone com.opensource.dictidy
 ```
@@ -323,8 +337,8 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 
 ## Security
 
-Your API key stays in the macOS Keychain. Dictation and local rewriting run on-device. Dictidy sends no
-telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+Your API keys stay in the macOS Keychain. Voice transcription runs on-device; rewriting sends text
+to the provider of your selected model. Dictidy sends no telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ---
 
