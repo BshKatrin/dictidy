@@ -9,36 +9,37 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-20
+
 ### Added
-- **Paste Last Text from the menu bar.** Click in a text box, then choose Paste Last Text to retry
-  the latest rewrite or dictation without opening History. The latest output stays available for
-  the current session even when history is turned off, and respects your clipboard restore setting.
-- **OpenAI rewriting alongside Anthropic.** Save either or both API keys and choose from one model menu.
-  Each provider loads its available text models from its API. Keys stay in separate macOS Keychain
-  entries, and existing Anthropic selections are preserved.
-
-### Removed
-- **Local rewrite models and their downloads.** Rewriting now uses the selected online model, including
-  Dictate + Clean. The local rewrite engine and automatic provider fallback are removed. Whisper voice
-  transcription continues to run on your Mac.
-
-### Fixed
-- **Reopen Settings from Finder.** Opening an already-running Dictidy app now shows Settings when
-  all of its windows are closed.
-- **Recover permissions after an app replacement.** If macOS no longer recognizes a configured app's
-  Accessibility or Microphone access, Dictidy opens its permission controls on launch. The menu's
-  Microphone action now requests access when macOS needs a fresh approval, instead of sending you to
-  a settings list where Dictidy may not yet appear.
+- **Paste Last Text.** Click in a text box, then choose Paste Last Text from the menu bar to retry
+  the latest rewrite or dictation without opening History or generating again. The latest output
+  stays available for the current session even with history off. Clipboard restoration still follows
+  your setting.
+- **OpenAI rewriting.** Save an OpenAI API key, an Anthropic API key, or both, then choose from one
+  model menu. Refresh each provider's available models independently. Keys stay in separate macOS
+  Keychain entries, and existing Anthropic model selections are preserved.
 
 ### Changed
-- **Two focused writing defaults.** Auto Clean tidies dictated speech while keeping your voice; the new
-  Rewrite instruction composes a clear, thoughtful professional message with more freedom over wording
-  and flow. Untouched Formal, Friendly, and Translate to English presets are retired. Custom instructions
-  and existing Rewrite prompts are preserved.
-- **Shared writing rules leave the style in control.** The base instructions preserve facts, uncertainty,
-  greetings, signatures, and email paragraph breaks without forcing every style into light editing or
-  substantial rewriting. Ordinary hyphens and literal technical text are preserved; prose still avoids
-  em and en dashes. Custom base instructions remain intact.
+- **Writing defaults.** Use Auto Clean to tidy dictated speech while keeping your voice, or Rewrite
+  to compose a clearer professional message with more freedom over wording and flow. Upgrading
+  retires untouched Formal, Friendly, and Translate to English presets. Custom instructions and
+  existing Rewrite prompts are preserved.
+- **Shared writing rules.** Preserve facts, uncertainty, greetings, signatures, and email paragraph
+  breaks while letting each style control how much to change the wording. Keep ordinary hyphens and
+  literal technical text; avoid em and en dashes in prose. Custom base instructions remain intact.
+
+### Fixed
+- **Settings access.** Reopen an already-running Dictidy app from Finder to show Settings, including
+  when all of its windows are closed.
+- **Permission recovery.** Find the permission controls on launch if macOS stops recognizing
+  Dictidy's Accessibility or Microphone access after an app replacement. Use the menu's Microphone
+  action to request fresh access when needed.
+
+### Removed
+- **Local rewriting and automatic provider fallback.** Configure an Anthropic or OpenAI API key for
+  rewriting, including Dictate + Clean. On-device rewrite models and their downloads are no longer
+  available. Whisper voice transcription and raw Dictate continue to run on your Mac without an API key.
 
 ## [1.2.1] - 2026-09-23
 
