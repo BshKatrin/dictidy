@@ -9,6 +9,8 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-21
+
 ### Added
 - **Choose a model per instruction.** Follow the default model from Rewrite settings or override it
   with a configured Anthropic or OpenAI model. The choice applies to menu actions, shortcuts,
