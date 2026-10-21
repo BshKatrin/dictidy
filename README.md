@@ -85,12 +85,23 @@ You can reopen setup anytime from **Dictidy menu -> Run Setup Again...**.
 4. Dictidy pastes the transcript at your cursor.
 
 **Dictate** pastes the raw transcript. **Dictate + Clean** transcribes locally, then cleans the text
-with your selected rewrite provider.
+with the cleanup instruction's selected model.
 
 ### Customize instructions
 
 Open **Settings -> Instructions** to add, edit, reorder, duplicate, delete, or assign shortcuts to
-instructions. Each instruction can have its own name, style prompt, and global hotkey.
+instructions. Each instruction can have its own name, model, style prompt, and global hotkey.
+
+The **Model** picker under an instruction's name starts with **Use default**, which follows the
+**Default model** in Settings -> Rewrite. Choose a specific Anthropic or OpenAI model to override
+the default for that instruction. This applies to menu actions, shortcuts, Dictate + Clean, and
+History's **Rewrite again**. Duplicating an instruction copies its model choice.
+
+An unavailable override stays saved and shows a warning. Dictidy asks you to choose another model
+or Use default rather than switching models automatically. Dictate + Clean checks the override
+before recording. If cleanup fails after transcription, the raw transcript is available through
+**Paste Last Text** and History when enabled, without being pasted automatically. Escape discards
+cancelled work.
 
 The built-in choices are **Auto Clean**, for tidying dictated speech while keeping your voice, and
 **Rewrite**, for composing a clearer professional message with more freedom over wording and flow.

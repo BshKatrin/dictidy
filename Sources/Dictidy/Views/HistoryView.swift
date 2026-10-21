@@ -255,7 +255,7 @@ struct HistoryView: View {
         return s
     }
 
-    /// Re-run an entry's source text through any instruction (using the active provider). The result
+    /// Re-run an entry's source text through any instruction (using its effective model). The result
     /// is recorded to History and copied to the clipboard.
     @ViewBuilder private func rewriteAgainMenu(for entry: HistoryEntry) -> some View {
         let source = entry.kind == .dictation ? entry.after : entry.before

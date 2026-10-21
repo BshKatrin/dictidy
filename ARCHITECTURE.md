@@ -18,7 +18,7 @@ Sources/
   DictidyTests/ ── dependency-free test runner (XCTest isn't available under CLT-only)
 ```
 
-- **`DictidyKit`** has no platform dependencies — `Instruction`, `RewriteModel`,
+- **`DictidyKit`** has no platform dependencies — `Instruction`, `RewriteModel`, `RewriteConfiguration`,
   `RewriteProvider`, `AnthropicModel`, `AnthropicClient`, `OpenAIClient` (both clients have injectable
   transports so request/error paths are testable), `HistoryEntry`, and `WordDiff`. This is where testable logic goes.
 - **`Services`** wrap the OS: `AccessibilityPermissions`, `MicrophonePermissions`, `KeychainService`,
@@ -32,9 +32,12 @@ Sources/
 ## Key flows
 
 **Rewrite** (⇧⌘R or a menu instruction): `RewriteService` copies the selection (synthetic ⌘C) →
-`AppState.performRewrite` captures the selected `RewriteModel` and routes to its provider with that
-provider’s Keychain credential → the result is recorded to history and pasted (synthetic ⌘V, restoring
-the clipboard). Errors leave the selected text intact; no automatic provider fallback is used.
+`RewriteConfiguration` resolves the instruction's override or the default model, capturing the instruction,
+model, and combined prompt → `AppState.performRewrite` routes to that model's provider with its Keychain
+credential → the result is recorded to history and pasted (synthetic ⌘V, restoring the clipboard).
+Menu actions, shortcuts, History's Rewrite again, and Dictate + Clean share this resolution. Dictation
+captures the configuration before recording and preserves the transcript for recovery if cleanup fails.
+Unavailable overrides never switch models automatically.
 
 **Provider configuration:** either or both API keys can be saved. A single menu combines the configured
 providers’ model catalogs, with provider-qualified IDs so names cannot collide. Each catalog refresh

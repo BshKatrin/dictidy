@@ -13,7 +13,7 @@ struct RewriteConfigurationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Add an Anthropic or OpenAI API key, or both. Choose a model below to rewrite your text.")
+            Text("Add an Anthropic or OpenAI API key, or both. Choose the default model for rewriting below.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -22,7 +22,7 @@ struct RewriteConfigurationView: View {
                 Divider()
             }
 
-            Picker("Model", selection: $state.selectedModelID) {
+            Picker("Default model", selection: $state.selectedModelID) {
                 if !state.availableModels.contains(where: { $0.id == state.selectedModelID }) {
                     Text("Choose a model").tag(state.selectedModelID)
                 }
@@ -37,6 +37,10 @@ struct RewriteConfigurationView: View {
             }
             .pickerStyle(.menu)
             .disabled(state.availableModels.isEmpty)
+
+            Text("Instructions use this model unless you choose an override in Settings → Instructions.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Button {

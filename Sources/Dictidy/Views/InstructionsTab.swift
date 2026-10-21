@@ -4,7 +4,7 @@ import DictidyKit
 
 /// Master-detail editor: the instruction list on the left, the selected instruction's editor on the
 /// right, so selecting a row never reflows the layout. Each instruction has a name, a system prompt,
-/// and an optional global shortcut.
+/// an optional model override, and an optional global shortcut.
 struct InstructionsTab: View {
     @EnvironmentObject var state: AppState
     @State private var selection: UUID?
@@ -108,6 +108,8 @@ struct InstructionsTab: View {
                     TextField("Name", text: binding.name)
                         .textFieldStyle(.roundedBorder).font(.headline)
 
+                    InstructionModelPicker(modelOverrideID: binding.modelOverrideID)
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Style").font(.subheadline).foregroundStyle(.secondary)
                         TextEditor(text: binding.systemPrompt)
@@ -133,7 +135,7 @@ struct InstructionsTab: View {
             VStack(spacing: 8) {
                 Image(systemName: "text.badge.checkmark").font(.largeTitle).foregroundStyle(.secondary)
                 Text("Select an instruction").font(.headline)
-                Text("…or add a new one. Each can have its own name, prompt, and global shortcut.")
+                Text("…or add a new one. Each can have its own name, model, prompt, and global shortcut.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -155,7 +157,7 @@ struct InstructionsTab: View {
 
     private func duplicateSelected() {
         guard let id = selection, let original = state.instructions.first(where: { $0.id == id }) else { return }
-        let copy = Instruction(name: original.name + " copy", systemPrompt: original.systemPrompt)
+        let copy = original.duplicated()
         state.addInstruction(copy)
         selection = copy.id
     }
@@ -173,5 +175,49 @@ struct InstructionsTab: View {
             get: { state.instructions.first(where: { $0.id == id }) ?? Instruction(name: "", systemPrompt: "") },
             set: { state.updateInstruction($0) }
         )
+    }
+}
+
+private struct InstructionModelPicker: View {
+    @EnvironmentObject var state: AppState
+    @Binding var modelOverrideID: String?
+
+    private var overrideUnavailable: Bool {
+        guard let id = modelOverrideID else { return false }
+        return !state.availableModels.contains { $0.id == id }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Model").font(.subheadline).foregroundStyle(.secondary)
+            Picker("Model", selection: $modelOverrideID) {
+                Text("Use default — \(state.selectedModel?.label ?? "No model selected")")
+                    .tag(nil as String?)
+                if overrideUnavailable, let id = modelOverrideID {
+                    Text("Unavailable · \(id)").tag(Optional(id)).disabled(true)
+                }
+                ForEach(RewriteProvider.allCases, id: \.self) { provider in
+                    let models = state.availableModels.filter { $0.provider == provider }
+                    if !models.isEmpty {
+                        Section(provider.displayName) {
+                            ForEach(models) { model in Text(model.label).tag(Optional(model.id)) }
+                        }
+                    }
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if overrideUnavailable {
+                Text("This model is unavailable. Choose another model or Use default. Check its API key or refresh models in Rewrite settings.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Applies wherever this instruction is used, including Dictate + Clean and History.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }

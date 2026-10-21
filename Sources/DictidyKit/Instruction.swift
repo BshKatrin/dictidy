@@ -9,16 +9,23 @@ public struct Instruction: Identifiable, Codable, Equatable {
     public var id: UUID
     public var name: String
     public var systemPrompt: String
+    /// A provider-qualified model ID, or nil to follow the app's default model.
+    public var modelOverrideID: String?
 
-    public init(id: UUID = UUID(), name: String, systemPrompt: String) {
+    public init(id: UUID = UUID(), name: String, systemPrompt: String, modelOverrideID: String? = nil) {
         self.id = id
         self.name = name
         self.systemPrompt = systemPrompt
+        self.modelOverrideID = modelOverrideID
     }
 
     /// Stable key used to derive this instruction's `KeyboardShortcuts.Name`.
     /// Derived from the id so renaming never breaks the bound shortcut.
     public var shortcutKey: String { "instruction-\(id.uuidString)" }
+
+    public func duplicated() -> Instruction {
+        Instruction(name: name + " copy", systemPrompt: systemPrompt, modelOverrideID: modelOverrideID)
+    }
 }
 
 extension Instruction {
@@ -150,7 +157,7 @@ extension Instruction {
             "Translate to English": [translatePrompt, legacyTranslatePrompt],
         ]
         var result = saved.filter { instruction in
-            !(retired[instruction.name]?.contains(instruction.systemPrompt) ?? false)
+            instruction.modelOverrideID != nil || !(retired[instruction.name]?.contains(instruction.systemPrompt) ?? false)
         }
         for i in result.indices {
             if result[i].name == "Auto Clean",

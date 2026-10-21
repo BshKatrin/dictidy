@@ -9,6 +9,17 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+### Added
+- **Choose a model per instruction.** Follow the default model from Rewrite settings or override it
+  with a configured Anthropic or OpenAI model. The choice applies to menu actions, shortcuts,
+  Dictate + Clean, and History's Rewrite again. Unavailable overrides stay saved and show a clear error
+  instead of silently switching models.
+
+### Fixed
+- **Recover dictation when cleanup fails.** Validate the cleanup instruction's model before recording.
+  If cleanup fails after transcription, recover the raw transcript through Paste Last Text and History
+  when enabled. Cancelled work is still discarded.
+
 ## [2.0.0] - 2026-10-20
 
 ### Added

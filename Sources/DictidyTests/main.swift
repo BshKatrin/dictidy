@@ -94,6 +94,28 @@ do {
     check("Codable round-trip preserves fields", false)
 }
 
+print("Instruction model persistence")
+check("existing and new instructions use the default model", inst.modelOverrideID == nil
+      && Instruction.defaults.allSatisfy { $0.modelOverrideID == nil })
+do {
+    let legacy = data(#"{"id":"00000000-0000-0000-0000-000000000001","name":"Existing","systemPrompt":"Keep my style."}"#)
+    let decoded = try JSONDecoder().decode(Instruction.self, from: legacy)
+    check("legacy instruction JSON loads without a model override", decoded.modelOverrideID == nil
+          && decoded.name == "Existing" && decoded.systemPrompt == "Keep my style."
+          && decoded.id.uuidString == "00000000-0000-0000-0000-000000000001")
+    let explicitNull = data(#"{"id":"00000000-0000-0000-0000-000000000001","name":"Existing","systemPrompt":"Style","modelOverrideID":null}"#)
+    check("explicit null means use default", try JSONDecoder().decode(Instruction.self, from: explicitNull).modelOverrideID == nil)
+    let overridden = Instruction(name: "Custom", systemPrompt: "My style", modelOverrideID: "openai:gpt-test")
+    let list = [decoded, overridden]
+    check("instruction persistence preserves overrides, IDs, and order",
+          try JSONDecoder().decode([Instruction].self, from: JSONEncoder().encode(list)) == list)
+    let copy = overridden.duplicated()
+    check("duplicate inherits the override and style with a fresh ID and shortcut",
+          copy.modelOverrideID == overridden.modelOverrideID && copy.systemPrompt == overridden.systemPrompt
+          && copy.name == "Custom copy" && copy.id != overridden.id && copy.shortcutKey != overridden.shortcutKey)
+    check("duplicate of a default-following instruction still follows default", decoded.duplicated().modelOverrideID == nil)
+} catch { check("instruction model persistence", false) }
+
 print("Instruction defaults migration")
 let oldAuto = Instruction(name: "Auto Clean", systemPrompt: Instruction.legacyAutoCleanPromptFull)
 let customAuto = Instruction(name: "Auto Clean", systemPrompt: "Clean speech. Correct Scott to Scot.")
@@ -134,6 +156,15 @@ check("missing and previous default base upgrade",
 check("custom and empty base remain intact",
       Instruction.migratedBaseSystemPrompt("My custom base") == "My custom base"
       && Instruction.migratedBaseSystemPrompt("") == "")
+let overriddenAuto = Instruction(name: "Auto Clean", systemPrompt: Instruction.legacyAutoCleanPrompt,
+                                 modelOverrideID: "openai:gpt-test")
+let overriddenFormal = Instruction(name: "Formal", systemPrompt: Instruction.formalPrompt,
+                                   modelOverrideID: "anthropic:claude-test")
+let migratedOverrides = Instruction.migratedDefaults([overriddenAuto, overriddenFormal])
+check("defaults migration preserves model overrides and customized presets",
+      migratedOverrides[0].modelOverrideID == overriddenAuto.modelOverrideID
+      && migratedOverrides[0].systemPrompt == Instruction.autoCleanPrompt
+      && migratedOverrides[0].id == overriddenAuto.id && migratedOverrides[1] == overriddenFormal)
 
 print("rewriteInputMessage")
 let wrapped = rewriteInputMessage("Can you run the bash script? Go.")
@@ -391,6 +422,72 @@ check("fallback default selects an available model",
       RewriteModel.resolvedSelection("", models: [opus], configuredProviders: [.anthropic]) == opus.id)
 check("empty catalogs have no selected model",
       RewriteModel.resolvedSelection("", models: [], configuredProviders: [.openai]) == "")
+
+print("Per-instruction model resolution")
+func expectConfigurationError(_ name: String, _ expected: RewriteConfigurationError,
+                              _ body: () throws -> Void) {
+    total += 1
+    do { try body(); failed += 1; print("  ✗ \(name) (expected an error)") }
+    catch let error as RewriteConfigurationError {
+        if error == expected { print("  ✓ \(name)") }
+        else { failed += 1; print("  ✗ \(name) (wrong configuration error)") }
+    } catch { failed += 1; print("  ✗ \(name) (unexpected error)") }
+}
+let defaultInstruction = Instruction(name: "Default", systemPrompt: "STYLE")
+var fixedInstruction = Instruction(name: "Fixed", systemPrompt: "FIXED STYLE", modelOverrideID: gpt.id)
+do {
+    let inherited = try RewriteConfiguration(instruction: defaultInstruction, defaultModelID: opus.id,
+        models: catalog, configuredProviders: [.anthropic, .openai], baseSystemPrompt: "BASE")
+    check("Use default resolves the current default model", inherited.model == opus && inherited.systemPrompt == "BASE\n\nSTYLE")
+    let changedDefault = try RewriteConfiguration(instruction: defaultInstruction, defaultModelID: gpt.id,
+        models: catalog, configuredProviders: [.anthropic, .openai], baseSystemPrompt: "BASE")
+    check("new actions follow changes to the default", changedDefault.model == gpt)
+    let fixed = try RewriteConfiguration(instruction: fixedInstruction, defaultModelID: opus.id,
+        models: catalog, configuredProviders: [.anthropic, .openai], baseSystemPrompt: "BASE")
+    check("override routes to its own provider and API model ID",
+          fixed.model.provider == .openai && fixed.model.modelID == gpt.modelID)
+    let withoutDefault = try RewriteConfiguration(instruction: fixedInstruction, defaultModelID: "",
+        models: catalog, configuredProviders: [.openai], baseSystemPrompt: "BASE")
+    check("valid override works without a configured default", withoutDefault.model == gpt)
+    let crossProvider = try RewriteConfiguration(instruction: Instruction(name: "Collision", systemPrompt: "",
+        modelOverrideID: collided.id), defaultModelID: sonnet.id, models: [sonnet, collided],
+        configuredProviders: [.anthropic, .openai], baseSystemPrompt: "")
+    check("overrides use provider-qualified identity for colliding API IDs", crossProvider.model == collided)
+    fixedInstruction.name = "Changed name"
+    fixedInstruction.systemPrompt = "Changed style"
+    fixedInstruction.modelOverrideID = sonnet.id
+    check("in-flight configuration keeps its captured instruction, model, and prompt",
+          fixed.instruction.name == "Fixed" && fixed.instruction.modelOverrideID == gpt.id
+          && fixed.model == gpt && fixed.systemPrompt == "BASE\n\nFIXED STYLE" && inherited.model == opus)
+    try fixed.validateAvailability(models: [gpt, sonnet], configuredProviders: [.openai])
+    check("captured model survives unrelated default and catalog changes", fixed.model == gpt)
+    expectConfigurationError("key removal after capture rejects the captured model", .modelUnavailable(gpt.id)) {
+        try fixed.validateAvailability(models: catalog, configuredProviders: [.anthropic])
+    }
+    expectConfigurationError("catalog removal after capture never redirects the request", .modelUnavailable(gpt.id)) {
+        try fixed.validateAvailability(models: [opus, sonnet], configuredProviders: [.anthropic, .openai])
+    }
+} catch { check("per-instruction resolution", false) }
+expectConfigurationError("missing default asks for setup", .defaultModelUnavailable) {
+    _ = try RewriteConfiguration(instruction: defaultInstruction, defaultModelID: "missing", models: catalog,
+        configuredProviders: [.anthropic, .openai], baseSystemPrompt: "")
+}
+expectConfigurationError("default without its provider key is unavailable", .defaultModelUnavailable) {
+    _ = try RewriteConfiguration(instruction: defaultInstruction, defaultModelID: opus.id, models: catalog,
+        configuredProviders: [.openai], baseSystemPrompt: "")
+}
+expectConfigurationError("missing override never falls back to a working default", .modelUnavailable("openai:missing")) {
+    _ = try RewriteConfiguration(instruction: Instruction(name: "Unavailable", systemPrompt: "",
+        modelOverrideID: "openai:missing"), defaultModelID: opus.id, models: catalog,
+        configuredProviders: [.anthropic, .openai], baseSystemPrompt: "")
+}
+expectConfigurationError("override without its provider key never falls back", .modelUnavailable(gpt.id)) {
+    _ = try RewriteConfiguration(instruction: Instruction(name: "Removed key", systemPrompt: "", modelOverrideID: gpt.id),
+        defaultModelID: opus.id, models: catalog, configuredProviders: [.anthropic], baseSystemPrompt: "")
+}
+check("configuration errors explain how to repair the selection",
+      RewriteConfigurationError.defaultModelUnavailable.localizedDescription.contains("default model")
+      && RewriteConfigurationError.modelUnavailable(gpt.id).localizedDescription.contains("Use default"))
 
 print("OpenAI catalog filtering")
 for id in ["gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.5", "gpt-4.1-mini", "gpt-4o-mini",

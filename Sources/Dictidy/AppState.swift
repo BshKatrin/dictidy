@@ -130,6 +130,7 @@ final class AppState: ObservableObject {
     private let historyLimit = 100                         // keep only the newest N rewrites
     private var whisperEngine: WhisperEngine?
     private var dictationMode: DictationMode?
+    private var dictationCleanupConfiguration: RewriteConfiguration?
     private var recordingTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     /// Releases the resident speech model after a spell of inactivity so one-off dictation doesn't
@@ -261,14 +262,23 @@ final class AppState: ObservableObject {
 
     // MARK: - Rewrite flow
 
+    private func rewriteConfiguration(for instruction: Instruction) throws -> RewriteConfiguration {
+        try RewriteConfiguration(instruction: instruction, defaultModelID: selectedModelID, models: models,
+                                 configuredProviders: configuredProviders, baseSystemPrompt: baseSystemPrompt)
+    }
+
+    private func configurationForAction(_ instruction: Instruction) -> RewriteConfiguration? {
+        do { return try rewriteConfiguration(for: instruction) }
+        catch {
+            settingsTab = instruction.modelOverrideID == nil ? .rewrite : .instructions
+            notify("Couldn't run \(instruction.name).\n\n\(error.localizedDescription)")
+            return nil
+        }
+    }
+
     func runRewrite(instruction: Instruction) {
         guard !isWorking, !isRecording else { return }
-
-        guard let model = selectedModel else {
-            settingsTab = .rewrite
-            notify("Set up a rewrite provider first.\n\nOpen Settings → Rewrite, add an Anthropic or OpenAI API key, and choose a model.")
-            return
-        }
+        guard let configuration = configurationForAction(instruction) else { return }
         guard AccessibilityPermissions.isTrusted else {
             accessibilityTrusted = false
             startPermissionMonitorIfNeeded() // resume live polling while the user grants it
@@ -288,8 +298,8 @@ final class AppState: ObservableObject {
                     return
                 }
                 guard self.processingIsCurrent(id) else { return }
-                await self.performRewrite(model: model, text: selection, instruction: instruction,
-                                          before: selection, kind: .rewrite, processingID: id)
+                try await self.performRewrite(configuration: configuration, text: selection,
+                                              before: selection, kind: .rewrite, processingID: id)
                 guard self.processingIsCurrent(id) else { return }
                 self.noSelectionFailureCount = 0
                 self.lastNoSelectionFailure = nil
@@ -302,58 +312,73 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Rewrite with the model captured at invocation, then paste and record the actual model used.
-    private func performRewrite(model: RewriteModel, text: String, instruction: Instruction,
-                                before: String, kind: HistoryKind, processingID: UUID) async {
-        guard processingIsCurrent(processingID) else { return }
-        do {
-            let result = try await generate(model: model, text: text,
-                systemPrompt: Instruction.composeSystemPrompt(base: baseSystemPrompt, style: instruction.systemPrompt))
-            guard processingIsCurrent(processingID) else { return }
-            try await pasteGeneratedText(result)
-            guard processingIsCurrent(processingID) else { return }
-            recordHistory(before: before, after: result, instructionName: instruction.name, model: model.label, kind: kind)
-            scheduleIdleUnload()
-        } catch {
-            guard processingIsCurrent(processingID) else { return }
-            notify(error.localizedDescription)
+    private struct DictationCleanupFailure: LocalizedError {
+        let reason: String
+        var errorDescription: String? {
+            "Couldn't clean your dictation.\n\n\(reason)\n\nYour transcript is available through Paste Last Text."
         }
     }
 
+    /// Use the captured instruction/model, preserving dictated source text if generation fails.
+    private func performRewrite(configuration: RewriteConfiguration, text: String,
+                                before: String, kind: HistoryKind, processingID: UUID) async throws {
+        guard processingIsCurrent(processingID) else { throw CancellationError() }
+        let result: String
+        do {
+            result = try await generate(configuration: configuration, text: text)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard processingIsCurrent(processingID) else { throw CancellationError() }
+            if kind == .dictationClean {
+                lastGeneratedText = text
+                recordRawDictation(transcript: text)
+                scheduleIdleUnload()
+                throw DictationCleanupFailure(reason: error.localizedDescription)
+            }
+            throw error
+        }
+        guard processingIsCurrent(processingID) else { throw CancellationError() }
+        try await pasteGeneratedText(result)
+        guard processingIsCurrent(processingID) else { throw CancellationError() }
+        recordHistory(before: before, after: result, instructionName: configuration.instruction.name,
+                      model: configuration.model.label, kind: kind)
+        scheduleIdleUnload()
+    }
+
     /// Credentials and wire model IDs come from the captured model, never a mutable picker selection.
-    private func generate(model: RewriteModel, text: String, systemPrompt: String) async throws -> String {
+    private func generate(configuration: RewriteConfiguration, text: String) async throws -> String {
+        try Task.checkCancellation()
+        try configuration.validateAvailability(models: models, configuredProviders: configuredProviders)
+        let model = configuration.model
         let userText = rewriteInputMessage(text)
         let key = apiKey(for: model.provider) ?? ""
         switch model.provider {
         case .anthropic:
             guard !key.isEmpty else { throw AnthropicError.missingAPIKey }
             return try await AnthropicClient(apiKey: key).rewrite(
-                text: userText, systemPrompt: systemPrompt, model: model.modelID)
+                text: userText, systemPrompt: configuration.systemPrompt, model: model.modelID)
         case .openai:
             guard !key.isEmpty else { throw OpenAIError.missingAPIKey }
             return try await OpenAIClient(apiKey: key).rewrite(
-                text: userText, systemPrompt: systemPrompt, model: model.modelID)
+                text: userText, systemPrompt: configuration.systemPrompt, model: model.modelID)
         }
     }
 
     /// Re-run a History entry and copy the completed rewrite without changing the current selection.
     func rewriteAgain(_ text: String, instruction: Instruction) {
         guard !isWorking, !isRecording, !text.isEmpty else { return }
-        guard let model = selectedModel else {
-            settingsTab = .rewrite
-            notify("Add an API key and choose a model in Settings → Rewrite.")
-            return
-        }
+        guard let configuration = configurationForAction(instruction) else { return }
         let id = beginProcessing(status: "Rewriting…")
         processingTask = Task { [weak self] in
             guard let self else { return }
             defer { self.finishProcessing(id: id) }
             do {
-                let result = try await self.generate(model: model, text: text,
-                    systemPrompt: Instruction.composeSystemPrompt(base: self.baseSystemPrompt, style: instruction.systemPrompt))
+                let result = try await self.generate(configuration: configuration, text: text)
                 guard self.processingIsCurrent(id) else { return }
                 self.lastGeneratedText = result
-                self.recordHistory(before: text, after: result, instructionName: instruction.name, model: model.label, kind: .rewrite)
+                self.recordHistory(before: text, after: result, instructionName: configuration.instruction.name,
+                                   model: configuration.model.label, kind: .rewrite)
                 self.copyToClipboard(result)
                 self.scheduleIdleUnload()
             } catch {
@@ -450,6 +475,7 @@ final class AppState: ObservableObject {
             stopWatchdog()
             DictationService.shared.cancel()
             dictationMode = nil
+            dictationCleanupConfiguration = nil
             playTone(start: false)
         }
 
@@ -527,6 +553,21 @@ final class AppState: ObservableObject {
     }
 
     private func beginRecording(mode: DictationMode, modelURL: URL) {
+        guard !isWorking, !isRecording else { return }
+        let cleanupConfiguration: RewriteConfiguration?
+        if mode == .clean, let instruction = dictationCleanupInstruction {
+            do { cleanupConfiguration = try rewriteConfiguration(for: instruction) }
+            catch RewriteConfigurationError.defaultModelUnavailable {
+                // Retain raw dictation when cleanup has never been configured; an explicit override must work.
+                cleanupConfiguration = nil
+            } catch {
+                settingsTab = .instructions
+                notify("Couldn't start Dictate + Clean with \(instruction.name).\n\n\(error.localizedDescription)")
+                return
+            }
+        } else {
+            cleanupConfiguration = nil
+        }
         playTone(start: true)   // before the engine grabs the mic, so the tone isn't clipped
         do {
             try DictationService.shared.start()
@@ -535,6 +576,7 @@ final class AppState: ObservableObject {
             return
         }
         dictationMode = mode
+        dictationCleanupConfiguration = cleanupConfiguration
         isRecording = true
         preloadEngine(modelURL: modelURL)   // load the model while the user talks
         startWatchdog()
@@ -545,11 +587,13 @@ final class AppState: ObservableObject {
         isRecording = false
         stopWatchdog()
         let mode = dictationMode ?? .clean
+        let cleanupConfiguration = dictationCleanupConfiguration
+        dictationMode = nil
+        dictationCleanupConfiguration = nil
         let samples = DictationService.shared.stopAndCollect()
         playTone(start: false)   // after the tap is removed, so the tone isn't captured into the audio
         guard !samples.isEmpty else { startErrorFlash(); return }   // no audio captured
 
-        dictationMode = nil
         let id = beginProcessing(status: "Transcribing…")
         processingTask = Task { [weak self] in
             guard let self else { return }
@@ -565,10 +609,10 @@ final class AppState: ObservableObject {
                     self.recordRawDictation(transcript: transcript)
                     self.scheduleIdleUnload()
                 case .clean:
-                    if let instruction = self.dictationCleanupInstruction, let model = self.selectedModel {
+                    if let configuration = cleanupConfiguration {
                         self.statusMessage = "Cleaning…"
-                        await self.performRewrite(model: model, text: transcript, instruction: instruction,
-                                                  before: transcript, kind: .dictationClean, processingID: id)
+                        try await self.performRewrite(configuration: configuration, text: transcript,
+                                                      before: transcript, kind: .dictationClean, processingID: id)
                     } else {
                         // No cleanup instruction or no rewrite provider set up — paste the raw transcript.
                         try await self.pasteGeneratedText(transcript)
