@@ -113,6 +113,10 @@ Translate to English presets and adds Rewrite if you do not already have an inst
 
 ### Recover previous work
 
+Choose **Copy Last Text** at the top of the Dictidy menu to copy the latest rewrite or dictation
+to your clipboard for manual pasting. The copied text stays on your clipboard even when clipboard
+restoration is enabled.
+
 If the latest output did not reach your text box, click in the box, open the Dictidy menu-bar icon,
 and choose **Paste Last Text**. It retries the latest rewrite or dictation at that cursor without
 generating again. The latest output is available until you quit Dictidy or clear history, including

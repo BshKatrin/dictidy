@@ -7,6 +7,9 @@ struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Copy Last Text") { state.copyLastText() }
+            .disabled(state.lastGeneratedText == nil || state.isWorking || state.isRecording)
+
         Button("Paste Last Text") { state.pasteLastText() }
             .disabled(state.lastGeneratedText == nil || state.isWorking || state.isRecording)
 

@@ -388,12 +388,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Paste recovery
+    // MARK: - Text recovery
 
     /// Retain output before attempting the paste so a failed handoff can be retried without generating again.
     private func pasteGeneratedText(_ text: String) async throws {
         lastGeneratedText = text
         try await RewriteService.shared.paste(text, restoreClipboard: restoreClipboard)
+    }
+
+    func copyLastText() {
+        guard !isWorking, !isRecording, let text = lastGeneratedText else { return }
+        copyToClipboard(text)
     }
 
     func pasteLastText() {
