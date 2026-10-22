@@ -9,6 +9,8 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-22
+
 ### Changed
 - **Paste Last Text comes first.** Recover the latest output from the top of the menu-bar menu.
 - **Setup is in Settings.** Find Run Setup Again under Settings → General.
