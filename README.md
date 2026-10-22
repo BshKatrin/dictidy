@@ -65,7 +65,7 @@ Dictidy also needs **Accessibility** access so it can copy selected text and pas
 the app you were already using. After granting Accessibility, quit and relaunch Dictidy so macOS applies
 the permission.
 
-You can reopen setup anytime from **Dictidy menu -> Run Setup Again...**.
+You can reopen setup anytime from **Settings -> General -> Run Setup Again...**.
 
 ---
 
@@ -118,7 +118,7 @@ and choose **Paste Last Text**. It retries the latest rewrite or dictation at th
 generating again. The latest output is available until you quit Dictidy or clear history, including
 when history is turned off. Your clipboard restore setting also applies to this action.
 
-Open **History...** from the menu to recover recent rewrites and dictations. History is local and capped
+Open **History** from the menu to recover recent rewrites and dictations. History is local and capped
 to the newest 100 entries.
 
 ---

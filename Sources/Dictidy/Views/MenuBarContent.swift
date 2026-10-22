@@ -7,6 +7,11 @@ struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Paste Last Text") { state.pasteLastText() }
+            .disabled(state.lastGeneratedText == nil || state.isWorking || state.isRecording)
+
+        Divider()
+
         if state.isRecording {
             Text("● Recording… — press Esc to cancel")
             Divider()
@@ -88,25 +93,15 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button("Paste Last Text") { state.pasteLastText() }
-            .disabled(state.lastGeneratedText == nil || state.isWorking || state.isRecording)
-
-        Divider()
-
         // Quiet "it's working" footer: which provider a rewrite will use right now.
         if !state.needsSetup && !state.isWorking && !state.isRecording {
             Text("Ready · \(state.activeProviderLabel)")
         }
 
-        Button("History…") { openHistory() }
+        Button("History") { openHistory() }
 
         Button("Settings…") { openSettings(.rewrite) }
             .keyboardShortcut(",", modifiers: .command)
-
-        Button("Run Setup Again…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: "onboarding")
-        }
 
         Button("Check for Updates…") {
             updater.check(force: true)

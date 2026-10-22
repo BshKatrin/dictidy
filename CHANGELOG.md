@@ -9,6 +9,12 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 
 ## [Unreleased]
 
+### Changed
+- **Paste Last Text comes first.** Recover the latest output from the top of the menu-bar menu.
+- **Setup is in Settings.** Find Run Setup Again under Settings → General.
+- **Simpler History label.** Open History directly from the menu without an ellipsis. Settings retains
+  the standard macOS ellipsis.
+
 ## [2.1.0] - 2026-10-21
 
 ### Added

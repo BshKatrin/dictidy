@@ -2,10 +2,16 @@ import SwiftUI
 
 struct GeneralTab: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.openWindow) private var openWindow
     @State private var showClearConfirm = false
     @State private var micGranted = MicrophonePermissions.isGranted
 
     var body: some View {
+        ScrollView { settingsContent }
+            .onAppear { micGranted = MicrophonePermissions.isGranted }
+    }
+
+    private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Startup").font(.title3).bold()
             Toggle("Launch Dictidy at login", isOn: Binding(
@@ -27,7 +33,7 @@ struct GeneralTab: View {
             Text("History").font(.title3).bold()
             Toggle("Keep history", isOn: $state.keepHistory)
             Text("Saves the text of each rewrite and dictation so you can recover it later (menu → "
-                 + "History…). Kept on this Mac in plain text (Application Support); the newest 100 "
+                 + "History). Kept on this Mac in plain text (Application Support); the newest 100 "
                  + "are retained.")
                 .font(.callout).foregroundStyle(.secondary)
             Button("Clear History…") { showClearConfirm = true }
@@ -75,9 +81,18 @@ struct GeneralTab: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer()
+            Divider()
+
+            Text("Setup").font(.title3).bold()
+            Button("Run Setup Again…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "onboarding")
+            }
+            Text("Reopen the guided setup for dictation, rewriting, and permissions.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .onAppear { micGranted = MicrophonePermissions.isGranted }
     }
 }
