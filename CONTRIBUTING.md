@@ -28,6 +28,7 @@ and signing explanation (macOS ties Accessibility/Keychain grants to the code si
 ```sh
 swift run DictidyTests
 ./Scripts/test-chatgpt-platform.sh
+./Scripts/test-compatible-server.sh
 ```
 
 Pure logic lives in the **`DictidyKit`** target and is unit-tested by the dependency-free runner in
@@ -39,13 +40,16 @@ The ChatGPT platform checks in `Tests/ChatGPTPlatformTests.swift` exercise the n
 listener, identity signatures, and token renewal with synthetic credentials and an in-memory vault.
 They do not access your saved account. See [the acceptance checklist](docs/CHATGPT_TESTING.md) for
 manual subscription testing.
+The custom server platform check uses real loopback HTTP to verify the production session's redirect
+and cookie policy without a running model. See [custom server acceptance checks](docs/CUSTOM_SERVER.md).
 
 ## Code layout
 
 - **`DictidyKit`**: pure, dependency-free logic (models, API parsing, provider selection, diffing).
   This is the unit-tested target and where testable logic should go.
 - **`Dictidy`**: the menu-bar app itself: SwiftUI views, permissions, hotkeys, dictation, and rewrite
-  orchestration. Speech transcription runs locally with Whisper; rewriting uses Anthropic or OpenAI.
+  orchestration. Speech transcription runs locally with Whisper; rewriting uses a cloud provider or
+  the configured OpenAI-compatible server.
   Platform-bound, verified by building and manual testing.
 
 ## Code style

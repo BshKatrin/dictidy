@@ -9,7 +9,8 @@ Dictidy is a free, open-source macOS menu-bar app for voice dictation and text r
 
 Select text in any app, press a hotkey, and Dictidy rewrites it in place. Or press a dictation hotkey,
 speak, and Dictidy pastes the transcript at your cursor. Rewriting uses your ChatGPT plan or an
-Anthropic or OpenAI API key. Speech-to-text always runs on your Mac.
+Anthropic or OpenAI API key, or an experimental OpenAI-compatible server connection.
+Speech-to-text always runs on your Mac.
 
 **Quick links:** [Install](#install) | [First launch](#first-launch) | [Use Dictidy](#use-dictidy) | [Privacy](#privacy-and-storage) | [Build from source](#build-from-source)
 
@@ -25,7 +26,8 @@ Anthropic or OpenAI API key. Speech-to-text always runs on your Mac.
 - macOS 13.3 or later
 - For rewriting: an eligible ChatGPT Plus or Pro subscription, an
   [Anthropic API key](https://console.anthropic.com/settings/keys), or an
-  [OpenAI API key](https://platform.openai.com/api-keys). ChatGPT plan access is currently in preview.
+  [OpenAI API key](https://platform.openai.com/api-keys), or a reachable OpenAI-compatible server
+  with a text model (experimental). ChatGPT plan access is currently in preview.
 - For dictation: about 1.6 GB for the local Whisper speech model
 
 ### Download and open
@@ -58,9 +60,9 @@ do not have to guess whether macOS permissions, keys, or model downloads worked.
 
 You can set up any mix of these:
 
-- **Rewriting:** connect ChatGPT with **Continue with ChatGPT**, or save an Anthropic or OpenAI API
-  key. Choose a default model from the connections you configure; individual instructions can
-  override it in **Settings -> Instructions**. ChatGPT plan and OpenAI API models appear separately
+- **Rewriting:** connect ChatGPT with **Continue with ChatGPT**, save an Anthropic or OpenAI API
+  key, or configure a **Local / custom server**. Choose a default model from your configured connections;
+  individual instructions can override it in **Settings -> Instructions**. ChatGPT plan and OpenAI API models appear separately
   so you can choose how requests are funded.
 - **Dictation:** download the Whisper model, grant Microphone access, and choose dictation shortcuts.
 
@@ -112,15 +114,36 @@ Sign out, or disconnect Dictidy in ChatGPT settings, before uninstalling to revo
 For build instructions and an end-to-end acceptance checklist, see
 [Testing ChatGPT subscriptions](docs/CHATGPT_TESTING.md).
 
+### Connect a local or remote model (experimental)
+
+In **Settings -> Rewrite -> Local / custom server**, enter an OpenAI-compatible API base URL,
+such as `http://127.0.0.1:8080/v1` for a server on this Mac, or
+`https://m1-air-server.<your-tailnet>.ts.net/v1` for a remote server behind Tailscale Serve.
+Use your actual server URL. Remote servers should use HTTPS; HTTP does not provide TLS encryption.
+
+Enter the server's API token if it requires one, then click **Save & Test Connection**. Dictidy
+loads the server's model list. Choose a text model in **Default model**, or under an instruction's
+**Model** override. The same connection works for selected text, Dictate + Clean, and History's
+Rewrite again. Dictidy does not install, start, or configure the inference server.
+
+The token is stored separately in Keychain. Leaving the field blank keeps a saved token only for
+the same address. Changing the address clears the previous token unless you enter a new one.
+**Remove token** keeps the server connection; **Remove Server** deletes both the address and token.
+
+Server model selections stay saved if the server is removed, replaced, or unavailable; choose another
+model explicitly to resume rewriting. Dictidy never falls back from a server model to a cloud model.
+The server must expose `GET /v1/models` and `POST /v1/chat/completions`, as llama-server does.
+See [the protocol and acceptance checks](docs/CUSTOM_SERVER.md) for details and current limits.
+
 ### Customize instructions
 
 Open **Settings -> Instructions** to add, edit, reorder, duplicate, delete, or assign shortcuts to
 instructions. Each instruction can have its own name, model, style prompt, and global hotkey.
 
 The **Model** picker under an instruction's name starts with **Use default**, which follows the
-**Default model** in Settings -> Rewrite. Choose a specific ChatGPT plan, Anthropic, or OpenAI API
-model to override the default for that instruction. This applies to menu actions, shortcuts, Dictate + Clean, and
-History's **Rewrite again**. Duplicating an instruction copies its model choice.
+**Default model** in Settings -> Rewrite. Choose a specific ChatGPT plan, Anthropic, OpenAI API,
+or custom server model to override the default for that instruction. This applies to menu actions,
+shortcuts, Dictate + Clean, and History's **Rewrite again**. Duplicating an instruction copies its model choice.
 
 An unavailable override stays saved and shows a warning. Dictidy asks you to choose another model
 or Use default rather than switching models automatically. Dictate + Clean checks the override
@@ -162,9 +185,8 @@ entries or clear existing history in **Settings -> General**.
 - **Dictates locally.** Speech-to-text uses Whisper on your Mac. Audio is not uploaded.
 - **Uses your existing plan or API keys.** Dictidy is free and open source. Connect an eligible
   ChatGPT plan, or use separately billed API access. Local voice transcription needs neither.
-- **Offers one model menu.** Connect ChatGPT, Anthropic, OpenAI API access, or any combination and
-  choose among their available text models. Refresh Models updates the list without changing a
-  selection that is still available.
+- **Offers one model menu.** Connect any combination of ChatGPT, Anthropic, OpenAI API access, and
+  a custom server. Refresh Models updates the list without changing a selection that is still available.
 - **Keeps setup visible.** The menu tells you what is missing and links directly to the relevant setup
   step.
 - **Has no telemetry.** Dictidy does not collect analytics.
@@ -177,8 +199,9 @@ entries or clear existing history in **Settings -> General**.
 |---|---|
 | Dictation audio | Processed on-device, kept in memory, not written to disk |
 | Whisper transcription | Produced on-device |
-| Rewrite text, including Dictate + Clean transcripts | Sent to the provider of the selected model, Anthropic or OpenAI |
+| Rewrite text, including Dictate + Clean transcripts | Sent to the selected model's connection: Anthropic, OpenAI, or your configured custom server |
 | API keys | Stored separately in the macOS Keychain, sent only to their respective provider |
+| Custom server token | Stored separately in macOS Keychain, sent only to the configured server; redirects are blocked |
 | ChatGPT access, refresh, and ID tokens | Stored in Dictidy’s macOS Keychain entry; used only with OpenAI |
 | ChatGPT account labels, client registrations, and installation ID | Stored locally in UserDefaults; no ChatGPT conversation access |
 | Whisper speech model | `~/Library/Application Support/Dictidy` |
@@ -190,8 +213,8 @@ entries or clear existing history in **Settings -> General**.
 ## How Dictidy Compares
 
 Dictidy combines free local dictation with configurable text rewriting on Apple Silicon Macs.
-Cleanup and rewriting use your connected ChatGPT plan or an Anthropic or OpenAI API key. API-key
-requests use separate API billing.
+Cleanup and rewriting use your connected ChatGPT plan, an Anthropic or OpenAI API key, or an
+experimental custom server connection. Cloud API-key requests use separate API billing.
 
 For dated comparisons and links to official product sources, see the
 [Wispr Flow comparison](https://dictidy.com/dictidy-vs-wispr-flow),
@@ -221,7 +244,8 @@ Open Anyway**.
 
 ### Rewrite models are missing
 
-Open **Settings -> Rewrite**, connect ChatGPT or save an Anthropic or OpenAI API key, and click
+Open **Settings -> Rewrite**, connect ChatGPT, save an Anthropic or OpenAI API key, or configure a
+**Local / custom server**, and click
 **Refresh Models**. Each connection shows its own loading status or error. Only configured
 connections appear in the model menu. If a request fails, the original text stays in place; choose
 another model to try again.
@@ -315,7 +339,7 @@ Resources/
 | App shell | SwiftUI `MenuBarExtra`, no Dock icon |
 | Global hotkeys | [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts) |
 | Capture and replace | Synthetic Command-C, rewrite/transcribe, synthetic Command-V, then optional clipboard restore |
-| Rewriting | Anthropic Messages API or OpenAI Responses API, with API keys or ChatGPT plan OAuth and live model catalogs |
+| Rewriting | Anthropic Messages, OpenAI Responses (API keys or ChatGPT plan OAuth), or an experimental OpenAI-compatible Chat Completions server; live model catalogs |
 | Speech-to-text | Whisper `large-v3-turbo` via prebuilt `whisper.cpp` XCFramework |
 | Audio capture | `AVAudioEngine` to 16 kHz mono samples |
 | Launch at login | `SMAppService.mainApp` |
@@ -343,6 +367,7 @@ rm -rf ~/Library/HTTPStorages/com.opensource.dictidy
 defaults delete com.opensource.dictidy 2>/dev/null || true
 security delete-generic-password -s com.opensource.dictidy -a anthropic-api-key 2>/dev/null || true
 security delete-generic-password -s com.opensource.dictidy -a openai-api-key 2>/dev/null || true
+security delete-generic-password -s com.opensource.dictidy -a compatible-api-key 2>/dev/null || true
 security delete-generic-password -s com.opensource.dictidy -a chatgpt-credentials 2>/dev/null || true
 tccutil reset Accessibility com.opensource.dictidy
 tccutil reset Microphone com.opensource.dictidy
@@ -381,7 +406,8 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 ## Security
 
 Your API keys and ChatGPT sign-in tokens stay in the macOS Keychain. Voice transcription runs on-device; rewriting sends text
-to the provider of your selected model. Dictidy sends no telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+to the connection of your selected model, including your configured custom server. Dictidy sends no telemetry.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ---
 

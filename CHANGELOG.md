@@ -10,6 +10,10 @@ Release notes and shown in the app's "Update available" screen. To cut a release
 ## [Unreleased]
 
 ### Added
+- **Experimental local / custom rewrite server.** Connect an OpenAI-compatible server such as
+  llama-server with a configurable API base URL and optional Keychain token. Use discovered models
+  for defaults and instruction overrides across all rewrite actions. Server failures never fall back
+  to cloud providers, and incomplete output never replaces source text.
 - **ChatGPT subscription connection.** Use Continue with ChatGPT in Rewrite settings or setup to
   connect an eligible Plus or Pro account, choose ChatGPT plan models, and manage usage. Tokens stay
   in Keychain and renew automatically. Saved accounts, sign-out, and API-key access remain separate.

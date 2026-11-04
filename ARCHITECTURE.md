@@ -19,7 +19,8 @@ Sources/
 ```
 
 - **`DictidyKit`** has no platform dependencies — `Instruction`, `RewriteModel`, `RewriteConfiguration`,
-  `RewriteProvider`, `AnthropicModel`, `AnthropicClient`, `OpenAIClient` (both clients have injectable
+  `RewriteProvider`, `AnthropicModel`, `CompatibleServerConfiguration`, `AnthropicClient`, `OpenAIClient`,
+  and `CompatibleServerClient` (clients have injectable
   transports so request/error paths are testable), `HistoryEntry`, and `WordDiff`. This is where testable logic goes.
 - **`Services`** wrap the OS: `AccessibilityPermissions`, `MicrophonePermissions`, `KeychainService`,
   `RewriteService` (the ⌘C-capture / ⌘V-paste dance), `ShortcutsRegistry` (global hotkeys),
@@ -40,12 +41,29 @@ Menu actions, shortcuts, History's Rewrite again, and Dictate + Clean share this
 captures the configuration before recording and preserves the transcript for recovery if cleanup fails.
 Unavailable overrides never switch models automatically.
 
-**Provider configuration:** ChatGPT plan accounts and either or both API keys can be connected.
+**Provider configuration:** ChatGPT plan accounts, API keys, and one experimental custom server can be connected.
 A single menu combines the configured providers’ model catalogs, with provider-qualified IDs so names
 cannot collide. ChatGPT model IDs also include the issued account registration, so switching accounts
 cannot redirect an instruction’s saved override. Each catalog refresh
 has its own status, error, and generation token; removing/replacing a key invalidates stale requests.
 Existing Anthropic model selections and cached catalogs migrate without changing custom prompts.
+
+**Custom server protocol:** `CompatibleServerConfiguration` validates and normalizes an HTTP(S) API
+base URL; a bare origin gets `/v1`. `GET models` discovers arbitrary model IDs without OpenAI's family
+filter. `POST chat/completions` sends the combined system rules and one user message with `stream: false`
+and `max_tokens: 2048`. Only a single assistant message ending with `finish_reason: stop` is accepted;
+truncated, refused, malformed, and empty output never replaces source text. Requests use an ephemeral
+session with cookies/cache disabled and redirects blocked, a 20-second catalog timeout, and a
+180-second rewrite timeout. Only the optional `compatible-api-key` Keychain credential is used.
+`Info.plist` enables `NSAllowsLocalNetworking` for local HTTP/IP endpoints while retaining ATS for
+other destinations, and supplies the local-network privacy description. Remote hostnames should use
+HTTPS. See Apple's [local networking transport policy](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking).
+
+The saved server has a UUID, included in its model identities and retained only when the normalized
+address is unchanged. Changing/removing the server invalidates cached catalogs and refresh generation
+tokens. Credentials are retained on a blank-token save only for the same address. Existing default
+and override selections for a disconnected/replaced server remain unavailable instead of selecting
+another connection. All rewrite entry points use the same captured configuration and availability check.
 
 **OpenAI protocol:** `GET /v1/models` uses Bearer authentication. Its catalog does not advertise
 modality or endpoint support, so the app filters modern Responses text families and their fine-tunes,
