@@ -24,6 +24,13 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Dictidy records your voice only while you dictate, transcribes it on your Mac, and never sends the audio anywhere.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Dictidy connects to the local rewrite server you configure to send text and receive rewrites.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>NSHumanReadableCopyright</key>
     <string>MIT License</string>
 </dict>

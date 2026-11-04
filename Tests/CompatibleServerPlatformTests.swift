@@ -64,6 +64,9 @@ struct CompatibleServerPlatformTests {
     }
 
     static func main() async throws {
+        let ats = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
+        precondition(ats?["NSAllowsLocalNetworking"] as? Bool == true && ats?["NSAllowsArbitraryLoads"] == nil,
+                     "Allow local HTTP without disabling transport security globally")
         let server = try Server()
         let port = try await server.start()
         defer { server.listener.cancel() }

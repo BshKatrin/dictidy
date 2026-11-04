@@ -12,5 +12,6 @@ swiftc -sdk "$DICTIDY_TEST_SDK" -emit-library -emit-module -module-name DictidyK
     -emit-module-path "$DICTIDY_TEST_DIR/DictidyKit.swiftmodule"
 swiftc -sdk "$DICTIDY_TEST_SDK" -parse-as-library -I "$DICTIDY_TEST_DIR" -L "$DICTIDY_TEST_DIR" -lDictidyKit \
     Sources/Dictidy/Services/CompatibleServerHTTP.swift Tests/CompatibleServerPlatformTests.swift \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Resources/Info.plist \
     -o "$DICTIDY_TEST_DIR/CompatibleServerPlatformTests"
 "$DICTIDY_TEST_DIR/CompatibleServerPlatformTests"
