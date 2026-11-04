@@ -607,6 +607,7 @@ let openAIErrors: [OpenAIError] = [.missingAPIKey, .http(400,"bad"), .network("o
 check("OpenAI errors have useful descriptions", openAIErrors.allSatisfy { !$0.localizedDescription.isEmpty })
 
 await runChatGPTTests()
+await runCompatibleServerTests()
 
 print("\n\(total - failed)/\(total) checks passed")
 if failed > 0 {
