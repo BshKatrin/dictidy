@@ -247,8 +247,10 @@ to the remote machine first.
 ## Build From Source
 
 This section is for contributors. If you only want to use Dictidy, install the prebuilt app above.
-Source builds also check for upstream releases. Installing an in-app update replaces your local
-app bundle with the published release; rebuild from source to keep using your own changes.
+Source builds are labeled with the latest changelog version plus `-local` and check for releases in
+`BshKatrin/dictidy`. They do not offer updates from the original repository. Installing an in-app
+update replaces your local app bundle with this fork's published release; rebuild from source to
+keep using your own changes.
 
 ### Requirements
 
@@ -259,16 +261,28 @@ app bundle with the published release; rebuild from source to keep using your ow
 ### Build and launch
 
 ```sh
-git clone https://github.com/danb235/dictidy.git
+git clone https://github.com/BshKatrin/dictidy.git
 cd dictidy
 ./Scripts/setup-signing.sh
 ./Scripts/build-app.sh
 ./Scripts/run.sh
 ```
 
+To choose an installed SDK explicitly, prefix the build command with `SDKROOT=/path/to/MacOSX.sdk`.
+
 `setup-signing.sh` creates a local self-signed signing identity. This keeps Accessibility and Keychain
 grants stable across rebuilds. Without it, every rebuild gets a new ad-hoc signature and macOS may ask
 for permissions again.
+
+To install in Applications, quit Dictidy, then run:
+
+```sh
+ditto Dictidy.app /Applications/Dictidy.app
+open /Applications/Dictidy.app
+```
+
+Repeat the build and copy steps after pulling changes to update your installed app. Settings,
+credentials, and downloaded speech models are shared with the previous installation.
 
 ### Test
 

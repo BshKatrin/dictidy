@@ -59,12 +59,19 @@ for _rb in "$BIN_DIR"/*.bundle; do
     fi
 done
 
-# Stamp the release version into the bundle (the release workflow sets DICTIDY_VERSION from the tag).
-if [ -n "${DICTIDY_VERSION:-}" ]; then
-    echo "==> Stamping version ${DICTIDY_VERSION}..."
-    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${DICTIDY_VERSION}" "$APP_DIR/Contents/Info.plist"
-    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${DICTIDY_VERSION}" "$APP_DIR/Contents/Info.plist"
+# Releases supply their tag version; source builds identify the latest changelog version as local.
+VERSION="${DICTIDY_VERSION:-}"
+if [ -z "$VERSION" ]; then
+    VERSION="$(awk '/^## \[[0-9]+\.[0-9]+\.[0-9]+\]/ { gsub(/^## \[|\].*$/, ""); print; exit }' CHANGELOG.md)"
+    if [ -z "$VERSION" ]; then
+        echo "ERROR: No release version found in CHANGELOG.md." >&2
+        exit 1
+    fi
+    VERSION="${VERSION}-local"
 fi
+echo "==> Stamping version ${VERSION}..."
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION%%-*}" "$APP_DIR/Contents/Info.plist"
 
 # Embed the whisper.cpp framework. It is a SwiftPM binaryTarget, so it is NOT
 # copied into the bundle automatically. Copy it into Contents/Frameworks and point @rpath there;
