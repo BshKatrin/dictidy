@@ -40,6 +40,32 @@ func runCompatibleServerTests() async {
     guard let server = try? CompatibleServerConfiguration(address: "https://server.example.ts.net/proxy/v1") else {
         check("test server configuration", false); return
     }
+    let local = RewriteModel(provider: .compatible, modelID: "rewriter", displayName: "rewriter",
+                             connectionID: server.id.uuidString)
+    let another = RewriteModel(provider: .compatible, modelID: "rewriter", displayName: "rewriter",
+                               connectionID: UUID().uuidString)
+    let cloud = RewriteModel(provider: .openai, modelID: "rewriter", displayName: "rewriter")
+    check("server model identities cannot collide with cloud or another server",
+          Set([local.id, another.id, cloud.id]).count == 3)
+    check("a disconnected or replaced server never switches the default to cloud or another server",
+          RewriteModel.resolvedSelection(local.id, models: [cloud], configuredProviders: [.openai]) == local.id
+          && RewriteModel.resolvedSelection(local.id, models: [another], configuredProviders: [.compatible]) == local.id)
+    check("a first server-only connection can supply the default",
+          RewriteModel.resolvedSelection("", models: [local], configuredProviders: [.compatible]) == local.id)
+    do {
+        let instruction = Instruction(name: "Local cleanup", systemPrompt: "Keep my voice.", modelOverrideID: local.id)
+        let configuration = try RewriteConfiguration(instruction: instruction, defaultModelID: cloud.id,
+                                                    models: [local, cloud], configuredProviders: [.compatible, .openai],
+                                                    baseSystemPrompt: "Base")
+        check("instruction override resolves the server even with a cloud default", configuration.model == local)
+        checkThrows("replacing the server invalidates a captured rewrite instead of redirecting it") {
+            try configuration.validateAvailability(models: [another, cloud], configuredProviders: [.compatible, .openai])
+        }
+        check("server configuration warnings remain distinct from paid API connections",
+              !RewriteProvider.apiKeyProviders.contains(.compatible)
+              && local.label == "Local / custom server · rewriter" && RewriteProvider.compatible.keyURL == nil
+              && RewriteProvider.compatible.apiHost == "your configured server")
+    } catch { check("server instruction routing", false) }
     let complete = #"{"choices":[{"message":{"role":"assistant","content":"First paragraph.\n\nSecond paragraph.","reasoning_content":"private reasoning"},"finish_reason":"stop"}]}"#
     await checkAsync("server rewrite preserves roles and paragraphs, ignores reasoning, and uses only its own token") {
         let client = CompatibleServerClient(configuration: server, token: " server-token ", transport: { request in

@@ -48,6 +48,9 @@ jobs:
       - name: ChatGPT native integration checks
         run: ./Scripts/test-chatgpt-platform.sh
 
+      - name: Compatible server HTTP integration checks
+        run: ./Scripts/test-compatible-server.sh
+
       - name: Coverage gate (DictidyKit)
         run: |
           set -euo pipefail

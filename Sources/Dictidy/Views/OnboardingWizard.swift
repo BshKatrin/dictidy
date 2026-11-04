@@ -230,7 +230,7 @@ private struct RewriteStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StepTitle("Rewrite", "Select text and Dictidy rewrites it in place using the online model you choose.")
+            StepTitle("Rewrite", "Select text and Dictidy rewrites it in place using the model and connection you choose.")
             Toggle("Set up rewriting", isOn: $model.rewriteEnabled).toggleStyle(.switch)
             if model.rewriteEnabled {
                 Divider()

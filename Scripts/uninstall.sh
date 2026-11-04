@@ -115,6 +115,7 @@ run defaults delete "$APP_NAME" 2>/dev/null || true
 echo "==> Removing saved credentials from Keychain..."
 run security delete-generic-password -s "$APP_ID" -a anthropic-api-key 2>/dev/null || true
 run security delete-generic-password -s "$APP_ID" -a openai-api-key 2>/dev/null || true
+run security delete-generic-password -s "$APP_ID" -a compatible-api-key 2>/dev/null || true
 run security delete-generic-password -s "$APP_ID" -a chatgpt-credentials 2>/dev/null || true
 
 echo "==> Resetting macOS permission grants..."

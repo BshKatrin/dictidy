@@ -13,7 +13,7 @@ struct RewriteConfigurationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Connect your ChatGPT plan or add an Anthropic or OpenAI API key. Then choose your default model.")
+            Text("Connect your ChatGPT plan, add an API key, or configure a local / custom server. Then choose your default model.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -42,6 +42,9 @@ struct RewriteConfigurationView: View {
                     Text("Using ChatGPT plan").font(.caption)
                     Link("Manage usage", destination: ChatGPTSignInService.usageURL).font(.caption)
                 }
+            } else if state.selectedModel?.provider == .compatible {
+                Text("Rewrites use your configured server. It must be running and reachable.")
+                    .font(.caption).foregroundStyle(.secondary)
             } else if let model = state.selectedModel {
                 Text("Uses your \(model.provider.displayName) API key and separate API billing.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -60,7 +63,7 @@ struct RewriteConfigurationView: View {
             }
 
             if state.availableModels.isEmpty {
-                Text(state.configuredProviders.isEmpty ? "Connect ChatGPT or save an API key to load models." : "No models loaded yet. Refresh Models to try again.")
+                Text(state.configuredProviders.isEmpty ? "Connect ChatGPT, save an API key, or configure a server to load models." : "No models loaded yet. Refresh Models to try again.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Divider()
@@ -68,10 +71,68 @@ struct RewriteConfigurationView: View {
                 ProviderKeyRow(provider: provider)
                 Divider()
             }
-            Text("Selected text is sent to the provider of the model you choose. ChatGPT plan models use your plan or permitted ChatGPT credits. API-key models use separate API billing. Voice transcription runs on your Mac.")
+            CompatibleServerConnectionRow()
+            Divider()
+            Text("Selected text is sent to the connection of the model you choose. Custom server models send text to your saved server address. ChatGPT plan models use your plan or permitted ChatGPT credits. Anthropic and OpenAI API models use separate API billing. Voice transcription runs on your Mac.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+private struct CompatibleServerConnectionRow: View {
+    @EnvironmentObject var state: AppState
+    @State private var address = ""
+    @State private var token = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Local / custom server").font(.headline)
+                Text("Experimental").font(.caption).foregroundStyle(.secondary)
+                if state.refreshingProviders.contains(.compatible) {
+                    StatusBadge(.working, label: "Testing connection…")
+                } else if state.compatibleServer != nil {
+                    StatusBadge(.ready, label: "Address saved")
+                }
+            }
+            Text("Connect an OpenAI-compatible server such as llama-server. Use HTTPS for a remote server, including a private Tailscale Serve address.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("API base URL").font(.caption)
+            TextField("https://server.example.ts.net/v1", text: $address)
+                .textFieldStyle(.roundedBorder)
+            SecureField("API token (optional)", text: $token).textFieldStyle(.roundedBorder)
+            Text("Tokens stay in macOS Keychain. A blank field keeps the saved token for the same address. For a different address, enter its token or leave blank for no authentication.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if state.hasCompatibleServerToken, let server = state.compatibleServer {
+                HStack {
+                    Text("Token saved").font(.caption).foregroundStyle(.secondary)
+                    Button("Remove token") {
+                        if state.saveCompatibleServer(address: server.baseURL.absoluteString, token: "", keepSavedToken: false) {
+                            token = ""
+                        }
+                    }.font(.caption)
+                }
+            }
+            HStack {
+                Button("Save & Test Connection") {
+                    if state.saveCompatibleServer(address: address, token: token) { token = "" }
+                }.disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Remove Server") {
+                    state.removeCompatibleServer()
+                    if state.compatibleServer == nil { address = ""; token = "" }
+                }.disabled(state.compatibleServer == nil)
+            }
+            if let error = state.modelErrors[.compatible] {
+                Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            } else if let date = state.modelsLastFetched[.compatible], state.compatibleServer != nil {
+                Text("\(state.availableModels.filter { $0.provider == .compatible }.count) models · Connection verified \(date.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .disabled(state.isWorking || state.isRecording)
+        .onAppear { address = state.compatibleServer?.baseURL.absoluteString ?? "" }
+        .onChange(of: state.compatibleServer?.baseURL) { url in address = url?.absoluteString ?? "" }
     }
 }
 

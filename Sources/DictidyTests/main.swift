@@ -383,8 +383,8 @@ await expectAnthropicError("non-UTF8 error body → .http with fallback message"
     _ = try await c.rewrite(text: "x", systemPrompt: "s", model: "m")
 }, where: { if case .http(500, let msg) = $0 { return msg == "unknown error" }; return false })
 
-print("Online providers and selection")
-check("providers include a distinct ChatGPT plan connection", RewriteProvider.allCases == [.anthropic, .openai, .chatgpt]
+print("Rewrite providers and selection")
+check("providers include separate plan and custom server connections", RewriteProvider.allCases == [.anthropic, .openai, .chatgpt, .compatible]
       && RewriteProvider.apiKeyProviders == [.anthropic, .openai]
       && RewriteProvider.chatgpt.displayName == "ChatGPT plan" && RewriteProvider.chatgpt.keyURL == nil
       && RewriteProvider.chatgpt.apiHost == "api.openai.com")

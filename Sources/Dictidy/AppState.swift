@@ -25,6 +25,8 @@ final class AppState: ObservableObject {
     @Published var refreshingProviders: Set<RewriteProvider> = []
     @Published var hasAnthropicAPIKey = false { didSet { updateSetupPulse() } }
     @Published var hasOpenAIAPIKey = false { didSet { updateSetupPulse() } }
+    @Published private(set) var compatibleServer: CompatibleServerConfiguration? { didSet { updateSetupPulse() } }
+    @Published private(set) var hasCompatibleServerToken = false
     @Published var launchAtLogin: Bool = false
     @Published var isWorking: Bool = false {
         didSet {
@@ -157,12 +159,14 @@ final class AppState: ObservableObject {
         static let dictationCleanupInstruction = "dictationCleanupInstruction"
         static let baseSystemPrompt = "baseSystemPrompt"
         static let instructionDefaultsRevision = "instructionDefaultsRevision"
+        static let compatibleServer = "compatibleServerConfiguration"
     }
 
     init() {
         loadPersisted()
         hasAnthropicAPIKey = KeychainService.exists(provider: .anthropic)
         hasOpenAIAPIKey = KeychainService.exists(provider: .openai)
+        hasCompatibleServerToken = KeychainService.exists(provider: .compatible)
         chatGPTObservation = chatGPT.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         chatGPT.onConnectionChanged = { [weak self] in self?.chatGPTConnectionChanged() }
         if !availableModels.isEmpty || configuredProviders.isEmpty { reconcileModelSelection() }
@@ -200,11 +204,16 @@ final class AppState: ObservableObject {
         case .anthropic: return hasAnthropicAPIKey
         case .openai: return hasOpenAIAPIKey
         case .chatgpt: return false
+        case .compatible: return hasCompatibleServerToken
         }
     }
 
     func isConfigured(_ provider: RewriteProvider) -> Bool {
-        provider == .chatgpt ? chatGPT.isConnected : hasAPIKey(for: provider)
+        switch provider {
+        case .chatgpt: return chatGPT.isConnected
+        case .compatible: return compatibleServer != nil
+        case .anthropic, .openai: return hasAPIKey(for: provider)
+        }
     }
 
     var configuredProviders: Set<RewriteProvider> {
@@ -216,6 +225,7 @@ final class AppState: ObservableObject {
             let catalog = models.filter {
                 $0.provider == provider && isConfigured(provider)
                     && (provider != .chatgpt || $0.connectionID == chatGPT.selectedAccountID)
+                    && (provider != .compatible || $0.connectionID == compatibleServer?.id.uuidString)
             }
             return provider == .chatgpt ? catalog : catalog.sorted {
                 $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
@@ -371,6 +381,12 @@ final class AppState: ObservableObject {
         let model = configuration.model
         let userText = rewriteInputMessage(text)
         switch model.provider {
+        case .compatible:
+            guard let server = compatibleServer, model.connectionID == server.id.uuidString else {
+                throw RewriteConfigurationError.modelUnavailable(model.id)
+            }
+            return try await compatibleServerClient(server).rewrite(
+                text: userText, systemPrompt: configuration.systemPrompt, model: model.modelID)
         case .anthropic:
             let key = apiKey(for: .anthropic) ?? ""
             guard !key.isEmpty else { throw AnthropicError.missingAPIKey }
@@ -735,6 +751,60 @@ final class AppState: ObservableObject {
 
     // MARK: - API keys and live catalogs
 
+    private func compatibleServerClient(_ server: CompatibleServerConfiguration) -> CompatibleServerClient {
+        CompatibleServerClient(configuration: server,
+                               token: hasCompatibleServerToken ? apiKey(for: .compatible) : nil,
+                               transport: { try await CompatibleServerHTTP.session.data(for: $0) })
+    }
+
+    /// Blank tokens retain an existing token only for the same address. Never carry it to a new server.
+    @discardableResult
+    func saveCompatibleServer(address: String, token: String, keepSavedToken: Bool = true) -> Bool {
+        do {
+            let candidate = try CompatibleServerConfiguration(address: address)
+            let sameAddress = candidate.baseURL == compatibleServer?.baseURL
+            let server = sameAddress ? compatibleServer! : candidate
+            let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty {
+                try KeychainService.save(token, provider: .compatible)
+                cachedAPIKeys[.compatible] = token
+                hasCompatibleServerToken = true
+            } else if !sameAddress || !keepSavedToken {
+                try KeychainService.delete(provider: .compatible)
+                cachedAPIKeys[.compatible] = nil
+                hasCompatibleServerToken = false
+            }
+            defaults.set(try JSONEncoder().encode(server), forKey: Keys.compatibleServer)
+            compatibleServer = server
+            invalidateCompatibleCatalog()
+            Task { await refreshModels(for: .compatible) }
+            return true
+        } catch {
+            modelErrors[.compatible] = error.localizedDescription
+            return false
+        }
+    }
+
+    func removeCompatibleServer() {
+        do { try KeychainService.delete(provider: .compatible) }
+        catch { modelErrors[.compatible] = error.localizedDescription; return }
+        cachedAPIKeys[.compatible] = nil
+        hasCompatibleServerToken = false
+        compatibleServer = nil
+        defaults.removeObject(forKey: Keys.compatibleServer)
+        invalidateCompatibleCatalog()
+        reconcileModelSelection()
+    }
+
+    private func invalidateCompatibleCatalog() {
+        refreshTokens[.compatible] = UUID()
+        refreshingProviders.remove(.compatible)
+        models.removeAll { $0.provider == .compatible }
+        modelsLastFetched[.compatible] = nil
+        modelErrors[.compatible] = nil
+        persistModels()
+    }
+
     private func apiKey(for provider: RewriteProvider) -> String? {
         if cachedAPIKeys[provider] == nil {
             cachedAPIKeys[provider] = KeychainService.load(provider: provider)
@@ -786,7 +856,8 @@ final class AppState: ObservableObject {
 
     func refreshModels(for provider: RewriteProvider) async {
         guard isConfigured(provider) else {
-            modelErrors[provider] = provider == .chatgpt ? ChatGPTError.notConnected.localizedDescription
+            modelErrors[provider] = provider == .compatible ? "Save your server address first."
+                : provider == .chatgpt ? ChatGPTError.notConnected.localizedDescription
                 : "Add your \(provider.displayName) API key first."
             return
         }
@@ -800,6 +871,12 @@ final class AppState: ObservableObject {
         do {
             let list: [RewriteModel]
             switch provider {
+            case .compatible:
+                guard let server = compatibleServer else { throw CompatibleServerError.invalidAddress }
+                list = try await compatibleServerClient(server).listModelIDs().map {
+                    RewriteModel(provider: .compatible, modelID: $0, displayName: $0,
+                                 connectionID: server.id.uuidString)
+                }
             case .anthropic:
                 let key = apiKey(for: .anthropic) ?? ""
                 list = try await AnthropicClient(apiKey: key).listModels().map {
@@ -819,7 +896,11 @@ final class AppState: ObservableObject {
             models.removeAll { $0.provider == provider }
             models.append(contentsOf: list)
             modelsLastFetched[provider] = Date()
-            if list.isEmpty { modelErrors[provider] = "No text rewriting models are available for this connection." }
+            if list.isEmpty {
+                modelErrors[provider] = provider == .compatible
+                    ? "No models were returned. Start the server with a text model, then refresh models."
+                    : "No text rewriting models are available for this connection."
+            }
             persistModels()
             reconcileModelSelection()
         } catch {
@@ -975,6 +1056,9 @@ final class AppState: ObservableObject {
         } else if let data = defaults.data(forKey: "cachedModels"),
                   let list = try? JSONDecoder().decode([AnthropicModel].self, from: data) {
             models = list.map { RewriteModel(provider: .anthropic, modelID: $0.id, displayName: $0.displayName) }
+        }
+        if let data = defaults.data(forKey: Keys.compatibleServer) {
+            compatibleServer = try? JSONDecoder().decode(CompatibleServerConfiguration.self, from: data)
         }
         for provider in RewriteProvider.allCases {
             modelsLastFetched[provider] = defaults.object(forKey: "modelsLastFetched." + provider.rawValue) as? Date
