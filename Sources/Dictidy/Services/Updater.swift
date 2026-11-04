@@ -32,7 +32,7 @@ final class Updater: ObservableObject {
 
     @Published private(set) var status: Status = .idle
 
-    private let repo = "danb235/dictidy"
+    private let repo = "BshKatrin/dictidy"
     private static let lastCheckKey = "updater.lastCheckAt"
 
     var currentVersion: String {

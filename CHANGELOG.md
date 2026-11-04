@@ -16,6 +16,9 @@ Release notes and shown in the app's "Update available" screen. To cut a release
   Incomplete responses never replace selected text, and plan failures never fall back to API billing.
 
 ### Fixed
+- **Keep fork builds on the fork's update channel.** Updates come from `BshKatrin/dictidy` rather
+  than the original repository. Source bundles show the latest changelog version with `-local`
+  instead of `1.0.0`.
 - **Limit local signing-key access.** New local signing identities trust `codesign` rather than
   granting every application access to the private key without a warning.
 
