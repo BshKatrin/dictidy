@@ -15,6 +15,10 @@ Release notes and shown in the app's "Update available" screen. To cut a release
   in Keychain and renew automatically. Saved accounts, sign-out, and API-key access remain separate.
   Incomplete responses never replace selected text, and plan failures never fall back to API billing.
 
+### Fixed
+- **Limit local signing-key access.** New local signing identities trust `codesign` rather than
+  granting every application access to the private key without a warning.
+
 ## [2.2.0] - 2026-10-22
 
 ### Added
